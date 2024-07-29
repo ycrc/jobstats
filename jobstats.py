@@ -79,7 +79,7 @@ class JobStats:
         # translate cluster name
         if self.cluster in c.CLUSTER_TRANS_INV:
             self.cluster = c.CLUSTER_TRANS_INV[self.cluster]
-        self.debug_print("jobid=%s, jobidraw=%s, start=%s, end=%s, gpus=%s, diff=%s, cluster=%s, data=%s, timelimitraw=%s" % 
+        self.debug_print("jobid=%s, jobidraw=%s, start=%s, end=%s, gpus=%s, diff=%s, cluster=%s, data=%s, timelimitraw=%s" %
             (self.jobid,self.jobidraw,self.start,self.end,self.gpus,self.diff,self.cluster,self.data,self.timelimitraw))
         if self.data is not None and self.data.startswith('JS1:') and len(self.data) > 10:
             try:
@@ -126,7 +126,7 @@ class JobStats:
                   "start",
                   "end",
                   "cluster",
-                  "reqtres",
+                  "alloctres",
                   "admincomment",
                   "user",
                   "account",
@@ -153,7 +153,7 @@ class JobStats:
                 self.start        = i.get('Start', None)
                 self.end          = i.get('End', None)
                 self.cluster      = i.get('Cluster', None)
-                self.tres         = i.get('ReqTRES', None)
+                self.tres         = i.get('AllocTRES', None)
                 if self.force_recalc:
                     self.data     = None
                 else:
@@ -171,7 +171,7 @@ class JobStats:
                 self.debug_print('jobidraw=%s, start=%s, end=%s, cluster=%s, tres=%s, data=%s, user=%s, account=%s, state=%s, timelimit=%s, nodes=%s, ncpus=%s, reqmem=%s, qos=%s, partition=%s, jobname=%s' % (self.jobidraw, self.start, self.end, self.cluster, self.tres, self.data, self.user, self.account, self.state, self.timelimitraw, self.nnodes, self.ncpus, self.reqmem, self.qos, self.partition, self.jobname))
         except Exception:
             self.error("Failed to lookup jobid %s" % self.jobid)
- 
+
         if self.jobidraw == None:
             if self.cluster:
                 clstr = c.CLUSTER_TRANS[self.cluster] if self.cluster in c.CLUSTER_TRANS else self.cluster
@@ -184,7 +184,7 @@ class JobStats:
             for part in self.tres.split(","):
                 if "gres/gpu=" in part:
                     self.gpus = int(part.split("=")[-1])
- 
+
         if self.timelimitraw.isnumeric():
             self.timelimitraw = int(self.timelimitraw)
         if "CANCEL" in self.state:
@@ -252,7 +252,7 @@ class JobStats:
                     params['time'] = time
             response = requests.get('{0}/api/v1/{1}'.format(self.prom_server, qstr), params)
             return response.json()
-        
+
         expanded_query = query%(self.cluster, self.jobidraw, self.diff)
         self.debug_print("query=%s, time=%s" %(expanded_query,self.end))
         try:
@@ -328,7 +328,7 @@ class JobStats:
     def simple_output(self):
         gutter = "  "
         # cpu time utilization
-        print(f"{gutter}CPU utilization per node (CPU time used/run time)") 
+        print(f"{gutter}CPU utilization per node (CPU time used/run time)")
         for node, used, alloc, cores in self.cpu_util__node_used_alloc_cores:
             msg = ""
             if used == 0: msg = f" {self.txt_bold}{self.txt_red}<--- CPU node was not used{self.txt_normal}"
