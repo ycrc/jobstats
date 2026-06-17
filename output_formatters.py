@@ -139,6 +139,8 @@ class BaseFormatter(ABC):
     def time_limit_formatted(self) -> str:
         self.js.time_eff_violation = False
         clr = self.txt_normal
+        if self.js.timelimitraw == "UNLIMITED":
+            return f"     Time Limit: {clr}UNLIMITED{self.txt_normal}"
         if self.js.state == "COMPLETED" and self.js.timelimitraw > 0:
             self.js.time_efficiency = round(100 * self.js.diff / (SECONDS_PER_MINUTE * self.js.timelimitraw))
             if self.js.time_efficiency > 100:
@@ -487,6 +489,18 @@ class ClassicOutput(BaseFormatter):
                     report += f"{gutter}    {node} (GPU {gpu_index}): {hs_used}/{hs_total} ({eff:.1f}%)\n"
             else:
                 report += f"{gutter}    An error was encountered ({self.js.gpu_mem_error_code})\n"
+        ########################################################################
+        #                             BATCH SCRIPT                             #
+        ########################################################################
+        if self.js.batch_script:
+            heading = f"{self.txt_bold}Batch Script{self.txt_normal}"
+            report += "\n" + heading.center(self.width) + "\n"
+            report += self.width * "=" + "\n"
+            lines = self.js.job_script.split("\n")
+            if lines[0].startswith("Batch Script for"):
+                report += "\n".join(lines[2:])
+            else:
+                report += self.js.job_script
         ########################################################################
         #                              JOB NOTES                               #
         ########################################################################

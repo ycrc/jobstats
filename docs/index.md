@@ -38,6 +38,7 @@ Jobstats is used by these institutions:
 - Harvard University - Research Computing
 - Johns Hopkins University - Advanced Research Computing
 - Iowa State University - High Performance Computing
+- Massachusetts Institute of Technology - Research Computing
 - Monash University - e-Research
 - Northwestern University - Research Computing and Data Services
 - NAVER LABS Europe
@@ -151,6 +152,7 @@ Consider these alternatives to Jobstats:
 
 - [REMORA](https://docs.tacc.utexas.edu/software/remora/)
 - [XDMod (SUPReMM)](https://supremm.xdmod.org/7.0/supremm-architecture.html)
+- [Meta GPU Cluster Monitoring (GCM)](https://github.com/facebookresearch/gcm)
 - [HPCPerfStats](https://github.com/TACC/HPCPerfStats)
 - [LLload](https://dl.acm.org/doi/10.1145/3626203.3670565)
 - [jobperf](https://dl.acm.org/doi/10.1145/3626203.3670608)

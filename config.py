@@ -8,9 +8,17 @@ PROM_SERVER = f"http://monitor1.{os.getenv('CLUSTER')}.ycrc.yale.edu:9090"
 # prometheus server address, port, and retention period
 PROM_RETENTION_DAYS = 14
 
-# if using Slurm database then include the lines below with "enabled": False
-# if using MariaDB then set "enabled": True and uncomment "config_file"
-EXTERNAL_DB_TABLE = "job_statistics"
+# Set to True if GPU stats have jobid label as opposed to using nvidia_gpu_jobId
+# This is available as of version 0.2.2 Sept 2025 in the repo
+# https://github.com/plazonic/nvidia_gpu_prometheus_exporter/
+GPU_EXPORTER_JOBID = True
+
+# If using Slurm database then include the lines below with "enabled": False
+# If using MariaDB/MySQL then set "enabled": True
+# Set "mirror_to_admin_comment": True to additionally write the JS1 payload
+# to the Slurm AdminComment field (sacctmgr). This preserves compatibility
+# with sacct-based tools such as reportseff which read GPU/multi-node
+# efficiency from AdminComment.
 EXTERNAL_DB_CONFIG = {
     "enabled": False,  # set to True to use the external db for storing stats
     "host": "127.0.0.1",
@@ -18,7 +26,8 @@ EXTERNAL_DB_CONFIG = {
     "database": "jobstats",
     "user": "jobstats",
     "password": "password",
-#     "config_file": "/path/to/jobstats-db.cnf"
+#     "config_file": "/path/to/jobstats-db.cnf",
+#     "mirror_to_admin_comment": False,  # also write JS1 payload to AdminComment via sacctmgr
 }
 
 # number of seconds between measurements

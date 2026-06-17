@@ -1,6 +1,6 @@
 # GPU Job Statistics
 
-GPU metrics (currently only NVIDIA) are collected by the <a href="https://github.com/plazonic/nvidia_gpu_prometheus_exporter" target="_blank">Jobstats GPU exporter</a> which was based on the exporter by Rohit Agarwal [[1]](https://github.com/mindprince/nvidia_gpu_prometheus_exporter). The main local changes were to add the handling of Multi-Instance GPUs (MIG) and two additional gauge metrics: `nvidia_gpu_jobId` and `nvidia_gpu_jobUid`. The table below lists all of the collected GPU fields.
+GPU metrics (currently only NVIDIA) are collected by the <a href="https://github.com/plazonic/nvidia_gpu_prometheus_exporter" target="_blank">Jobstats GPU exporter</a> which was based on the [exporter by Rohit Agarwal](https://github.com/mindprince/nvidia_gpu_prometheus_exporter). The main local changes were to add the handling of Multi-Instance GPUs (MIG) and additional jobid label. The table below lists all of the collected GPU fields.
 
 | Name | Description | Type |
 | ---- | ----------- | ---- |
@@ -10,12 +10,12 @@ GPU metrics (currently only NVIDIA) are collected by the <a href="https://github
 | `nvidia_gpu_num_devices`        | Number of GPU devices gauge | gauge |
 | `nvidia_gpu_power_usage_milliwatts` | Power usage of the GPU device in milliwatts | gauge |
 | `nvidia_gpu_temperature_celsius`    | Temperature of the GPU device in Celsius | gauge |
-| `nvidia_gpu_jobId` | JobId number of a job currently using this GPU as reported by Slurm | gauge |
-| `nvidia_gpu_jobUid` | UID number of user running jobs on this GPU | gauge |
+| `nvidia_gpu_jobId` | JobId number of a job currently using this GPU as reported by Slurm (no longer used)| gauge |
+| `nvidia_gpu_jobUid` | UID number of user running jobs on this GPU (no longer used)| gauge |
 
 !!! note
 
-    Note that the approach described here is not appropriate for clusters that allow for GPU sharing (e.g., sharding).
+    The approach described here is not appropriate for clusters that allow for GPU sharing (e.g., sharding).
 
 
 # GPU Job Ownership Helper
@@ -34,7 +34,7 @@ Prolog=/etc/slurm/prolog.d/*.sh
 Epilog=/etc/slurm/epilog.d/*.sh
 ```
 
-For efficiency and simplicity, `JobId` and `jobUid` are collected from files in either '/run/gpustat/UUID-OF-THE-GPU` (e.g. `/run/gpustat/GPU-03aa20a1-2e97-d125-629d-fd4e5734553f`) or `/run/gpustat/0` (for GPU 0), `/run/gpustat/1` (for GPU 1), and so on. For example:
+For efficiency and simplicity, `JobId` and `jobUid` are collected from files in either `/run/gpustat/UUID-OF-THE-GPU` (e.g. `/run/gpustat/GPU-03aa20a1-2e97-d125-629d-fd4e5734553f`) or `/run/gpustat/0` (for GPU 0), `/run/gpustat/1` (for GPU 1), and so on. For example:
 
 ```
 $ cat /run/gpustat/0
@@ -45,9 +45,9 @@ In the above, the first number is the `jobid` and the second is the `UID` number
 
 # GPU Ownership Caveats
 
-Depending on your slurm gres configuration you may need to change either prolog/epilog scripts or gres.conf in order to match correctly GPUs to jobs running on them. The problem is in the difference between GPU ordinal number and its minor number. Slurm's gres.conf can make CUDA_VISIBLE_DEVICES in prolog/epilog scripts be the (recommended) ordinal number, the minor number or even something entirely different.
+Depending on your Slurm gres configuration you may need to change either prolog/epilog scripts or `gres.conf` in order to match correctly GPUs to jobs running on them. The problem is in the difference between GPU ordinal number and its minor number. The Slurm file `gres.conf` can make `CUDA_VISIBLE_DEVICES` in prolog/epilog scripts be the (recommended) ordinal number, the minor number or even something entirely different.
 
-The ordinal number corresponds to the order of how GPUs are displayed in the nvidia-smi output where they are sorted by their PCI/BUS-id number (lowest one is #0, and so on). This is also the number you have to use in CUDA_VISIBLE_DEVICES or as a parameter to `nvidia-smi -i` option.
+The ordinal number corresponds to the order of how GPUs are displayed in the nvidia-smi output where they are sorted by their PCI/BUS-id number (lowest one is #0, and so on). This is also the number you have to use in `CUDA_VISIBLE_DEVICES` or as a parameter to `nvidia-smi -i` option.
 
 A GPU minor number corresponds to its `/dev/nvidiaX` number. One way to see GPU minor numbers would be to run the following:
 
@@ -79,7 +79,7 @@ slurm will assume that GPU#0 is `/dev/nvidia0` (GPU#1 is `/dev/nvidia1`, ...).  
 
 One obvious fix would be to stick with `AutoDetect=nvml`. Another would be to not attempt to use UUID's for data collection, that is to remove
 
-```
+```bash
   if [ "${i:0:3}" != "MIG" ]; then
     UUID="`/usr/bin/nvidia-smi --query-gpu=uuid --format=noheader,csv -i $i`"
     echo $SLURM_JOB_ID $SLURM_JOB_UID > "$DEST/$UUID"
@@ -88,7 +88,7 @@ One obvious fix would be to stick with `AutoDetect=nvml`. Another would be to no
 
 which will make it rely only on the numbers in `CUDA_VISIBLE_DEVICES`. Note that this relies on using a recent version of our `nvidia_gpu_exporter` that defaults to using minor numbers in `/run/gpustats`.
 
-You could also set gres.conf by hand correctly:
+You could also set `gres.conf` by hand correctly:
 
 ```
 Name=gpu Type=a100 Count=8 File=/dev/nvidia2,/dev/nvidia3,/dev/nvidia0,/dev/nvidia1,/dev/nvidia6,/dev/nvidia7,/dev/nvidia4,/dev/nvidia5
@@ -96,7 +96,7 @@ Name=gpu Type=a100 Count=8 File=/dev/nvidia2,/dev/nvidia3,/dev/nvidia0,/dev/nvid
 
 Finally, assuming `File=/dev/nvidia[0-7]` config (so use of minor numbers) you can figure out the ordinal number in the script, e.g.:
 
-```
+```bash
 #!/bin/bash
 DEST=/run/gpustat
 [ -e $DEST ] || mkdir -m 755 $DEST

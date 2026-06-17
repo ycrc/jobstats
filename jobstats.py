@@ -1,5 +1,6 @@
 import csv
 import os
+import re
 import subprocess
 import sys
 import time
@@ -12,6 +13,8 @@ import syslog
 import config as c
 if c.EXTERNAL_DB_CONFIG.get("enabled", False):
     from db_handler import JobstatsDBHandler
+if not hasattr(c, "GPU_EXPORTER_JOBID"):
+    c.GPU_EXPORTER_JOBID = False
 
 __version__ = "1.0.0"
 
@@ -30,11 +33,15 @@ CLUSTER = os.getenv('CLUSTER')
 
 # class that gets and holds per job prometheus statistics
 class Jobstats:
+    slurm_version = None
+    sluid_available = False
+
     # initialize basic job stats, can be called either with those stats
     # provided and if not it will fetch them
     def __init__(self,
                  jobid=None,
                  jobidraw=None,
+                 sluid=None,
                  start=None,
                  end=None,
                  gpus=None,
@@ -43,12 +50,18 @@ class Jobstats:
                  debug=False,
                  debug_syslog=False,
                  force_recalc=False,
+                 batch_script=False,
                  json_or_base64=False):
+        if self.slurm_version == None:
+            self.slurm_version = subprocess.check_output(["sacct", "-V"], stderr=DEVNULL).decode("utf-8").split()[1]
+            if int(self.slurm_version.split(".")[0]) > 25:
+                self.sluid_available = True
         self.cluster = cluster
         self.prom_server = prom_server
         self.debug = debug
         self.debug_syslog = debug_syslog
         self.force_recalc = force_recalc
+        self.batch_script = batch_script
         self.sp_node = {}
         # translate cluster name
         if self.cluster in c.CLUSTER_TRANS:
@@ -78,6 +91,7 @@ class Jobstats:
         #    self.cluster = c.CLUSTER_TRANS_INV[self.cluster]
         self.debug_print("jobid=%s, " \
                          "jobidraw=%s, " \
+                         "sluid=%s, " \
                          "start=%s, " \
                          "end=%s, " \
                          "gpus=%s, " \
@@ -86,6 +100,7 @@ class Jobstats:
                          "data=%s, " \
                          "timelimitraw=%s" % (self.jobid,
                                               self.jobidraw,
+                                              self.sluid,
                                               self.start,
                                               self.end,
                                               self.gpus,
@@ -106,6 +121,9 @@ class Jobstats:
         if len(self.sp_node) == 0 and json_or_base64:
             return
         self.parse_stats()
+        if self.batch_script:
+            cmd = ["sacct", "-j", f"{self.jobid}", "-B"]
+            self.job_script = subprocess.check_output(cmd, stderr=DEVNULL).decode("utf-8")
 
     def nodes(self):
         return self.sp_node
@@ -150,6 +168,8 @@ class Jobstats:
                   "partition",
                   "timelimitraw",
                   "jobname"]
+        if self.sluid_available:
+            fields.insert(-1, "sluid")
         # jobname must be the last field to handle "|" chars later on
         assert fields[-1] == "jobname"
         fields = ",".join(fields)
@@ -163,6 +183,7 @@ class Jobstats:
             sacct_output = subprocess.check_output(cmd, stderr=DEVNULL).decode("utf-8").split('\n')
             for i in csv.DictReader(sacct_output, delimiter='|'):
                 self.jobidraw     = i.get('JobIDRaw', None)
+                self.sluid        = i.get('SLUID', None)
                 self.start        = i.get('Start', None)
                 self.end          = i.get('End', None)
                 self.cluster      = i.get('Cluster', None)
@@ -179,7 +200,8 @@ class Jobstats:
                             db_handler = JobstatsDBHandler()
                             self.data = db_handler.get_jobstats(self.cluster, self.jobidraw)
                             if self.data:
-                                self.debug_print(f"Retrieved job data from external database for job {self.jobidraw}")
+                                msg = f"Retrieved job data from external database for job {self.jobidraw}"
+                                self.debug_print(mg)
                         except Exception as e:
                             self.debug_print(f"Failed to retrieve from external database: {e}")
 
@@ -194,6 +216,7 @@ class Jobstats:
                 self.partition    = i.get('Partition', None)
                 self.jobname      = i.get('JobName', None)
                 self.debug_print('jobidraw=%s, ' \
+                                 'sluid=%s, ' \
                                  'start=%s, ' \
                                  'end=%s, ' \
                                  'cluster=%s, ' \
@@ -209,6 +232,7 @@ class Jobstats:
                                  'qos=%s, ' \
                                  'partition=%s, ' \
                                  'jobname=%s' % (self.jobidraw,
+                                                 self.sluid,
                                                  self.start,
                                                  self.end,
                                                  self.cluster,
@@ -286,12 +310,12 @@ class Jobstats:
         if 'data' in d:
             j = d['data']['result']
             for i in j:
-                node=i['metric']['instance'].split(':')[0]
+                node = i['metric']['instance'].split(':')[0]
                 minor = i['metric'].get('minor_number', None)
                 if 'value' in i:
-                    v=i['value'][1]
+                    v = i['value'][1]
                 if 'values' in i:
-                    v=i['values'][0][0]
+                    v = i['values'][0][0]
                 # trim unneeded precision
                 if '.' in v:
                     v = round(float(v), 1)
@@ -306,7 +330,7 @@ class Jobstats:
                 else:
                     self.sp_node[node][n] = v
 
-    def get_data(self, where, query):
+    def get_data(self, where, query, query_sluid=False):
         # run a query against prometheus
         def __run_query(q, start=None, end=None, time=None, step=2*SAMPLING_PERIOD):
             params = { 'query': q, }
@@ -321,8 +345,10 @@ class Jobstats:
                     params['time'] = time
             response = requests.get('{0}/api/v1/{1}'.format(self.prom_server, qstr), params)
             return response.json()
-
-        expanded_query = query % (self.cluster, self.jobidraw, self.diff)
+        
+        expanded_query = query.format(cluster=self.cluster, jobid=self.jobidraw, diff=int(self.diff))
+        if query_sluid and self.sluid != None:
+            expanded_query += " or " + query.format(cluster=self.cluster, jobid=self.sluid, diff=int(self.diff))
         self.debug_print("query=%s, time=%s" % (expanded_query,self.end))
         try:
             j = __run_query(expanded_query, time=self.end)
@@ -343,26 +369,34 @@ class Jobstats:
     def get_job_stats(self, *args):
         # query CPU and Memory utilization data
         if not args or "total_memory" in args:
-            self.get_data('total_memory', "max_over_time(cgroup_memory_total_bytes{cluster='%s',jobid='%s',step='',task=''}[%ds])")
+            self.get_data('total_memory', "max_over_time(cgroup_memory_total_bytes{{cluster='{cluster}',jobid='{jobid}',step='',task=''}}[{diff}s])", True)
         if not args or "used_memory" in args:
-            self.get_data('used_memory', "max_over_time(cgroup_memory_rss_bytes{cluster='%s',jobid='%s',step='',task=''}[%ds])")
+            self.get_data('used_memory', "max_over_time(((cgroup_memory_rss_bytes{{cluster='{cluster}',jobid='{jobid}',step='',task=''}}+cgroup_memory_shmem_bytes{{cluster='{cluster}',jobid='{jobid}',step='',task=''}}) or 1*cgroup_memory_rss_bytes{{cluster='{cluster}',jobid='{jobid}',step='',task=''}})[{diff}s:])", True)
         if not args or "total_time" in args:
-            self.get_data('total_time', "max_over_time(cgroup_cpu_total_seconds{cluster='%s',jobid='%s',step='',task=''}[%ds])")
+            self.get_data('total_time', "max_over_time(cgroup_cpu_total_seconds{{cluster='{cluster}',jobid='{jobid}',step='',task=''}}[{diff}s])", True)
         if not args or "cpus" in args:
-            self.get_data('cpus', "max_over_time(cgroup_cpus{cluster='%s',jobid='%s',step='',task=''}[%ds])")
+            self.get_data('cpus', "max_over_time(cgroup_cpus{{cluster='{cluster}',jobid='{jobid}',step='',task=''}}[{diff}s])", True)
 
         # and now GPUs
         if self.gpus:
             if not args or "gpu_total_memory" in args:
-                self.get_data('gpu_total_memory', "max_over_time((nvidia_gpu_memory_total_bytes{cluster='%s'} and nvidia_gpu_jobId == %s)[%ds:])")
+                if c.GPU_EXPORTER_JOBID:
+                    self.get_data('gpu_total_memory', "max_over_time(nvidia_gpu_memory_total_bytes{{cluster='{cluster}',jobid='{jobid}'}}[{diff}s:])")
+                else:
+                    self.get_data('gpu_total_memory', "max_over_time((nvidia_gpu_memory_total_bytes{{cluster='{cluster}'}} and nvidia_gpu_jobId == {jobid})[{diff}s:])")
             if not args or "gpu_used_memory" in args:
-                self.get_data('gpu_used_memory', "max_over_time((nvidia_gpu_memory_used_bytes{cluster='%s'} and nvidia_gpu_jobId == %s)[%ds:])")
+                if c.GPU_EXPORTER_JOBID:
+                    self.get_data('gpu_used_memory', "max_over_time(nvidia_gpu_memory_used_bytes{{cluster='{cluster}',jobid='{jobid}'}}[{diff}s:])")
+                else:
+                    self.get_data('gpu_used_memory', "max_over_time((nvidia_gpu_memory_used_bytes{{cluster='{cluster}'}} and nvidia_gpu_jobId == {jobid})[{diff}s:])")
             if not args or "gpu_utilization" in args:
-                self.get_data('gpu_utilization', "avg_over_time((nvidia_gpu_duty_cycle{cluster='%s'} and nvidia_gpu_jobId == %s)[%ds:])")
+                if c.GPU_EXPORTER_JOBID:
+                    self.get_data('gpu_utilization', "avg_over_time((nvidia_gpu_duty_cycle{{cluster='{cluster}',jobid='{jobid}'}} or (nvidia_gpu_graphics_util_percent{{cluster='{cluster}',jobid='{jobid}'}} * 100))[{diff}s:])")
+                else:
+                    self.get_data('gpu_utilization', "avg_over_time(((nvidia_gpu_duty_cycle{{cluster='{cluster}'}} or (nvidia_gpu_graphics_util_percent{{cluster='{cluster}'}} * 100)) and nvidia_gpu_jobId == {jobid})[{diff}s:])")
 
     def parse_stats(self):
         sp_node = self.sp_node
-
         if len(sp_node) == 0:
             if self.diff < SAMPLING_PERIOD:
                 cmd = ["seff", f"{self.jobid}"]
@@ -386,11 +420,10 @@ class Jobstats:
         total_cores = 0
         self.cpu_util_error_code = 0
         self.cpu_util__node_used_alloc_cores = []
-        for n in sp_node:
-            d = sp_node[n]
+        for n, d in sp_node.items():
             if 'total_time' in d and 'cpus' in d:
-                used  = sp_node[n]['total_time']
-                cores = sp_node[n]['cpus']
+                used  = d['total_time']
+                cores = d['cpus']
                 alloc = self.diff * cores
                 total += alloc
                 total_used += used
@@ -413,12 +446,11 @@ class Jobstats:
         total_cores = 0
         self.cpu_mem_error_code = 0
         self.cpu_mem__node_used_alloc_cores = []
-        for n in sp_node:
-            d = sp_node[n]
+        for n, d in sp_node.items():
             if 'used_memory' in d and 'total_memory' in d and 'cpus' in d:
-                used  = sp_node[n]['used_memory']
-                alloc = sp_node[n]['total_memory']
-                cores = sp_node[n]['cpus']
+                used  = d['used_memory']
+                alloc = d['total_memory']
+                cores = d['cpus']
                 total += alloc
                 total_used += used
                 total_cores += cores
@@ -440,8 +472,7 @@ class Jobstats:
             overall_gpu_count = 0
             self.gpu_util_error_code = 0
             self.gpu_util__node_util_index = []
-            for n in sp_node:
-                d = sp_node[n]
+            for n, d in sp_node.items():
                 if 'gpu_utilization' in d:
                     gpus = list(d['gpu_utilization'].keys())
                     gpus.sort()
@@ -464,8 +495,7 @@ class Jobstats:
             overall_total = 0
             self.gpu_mem_error_code = 0
             self.gpu_mem__node_used_total_index = []
-            for n in sp_node:
-                d = sp_node[n]
+            for n, d in sp_node.items():
                 if 'gpu_used_memory' in d and 'gpu_total_memory' in d:
                     gpus = list(d['gpu_total_memory'].keys())
                     gpus.sort()
