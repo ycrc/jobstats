@@ -1,4 +1,4 @@
-#!/apps/ycrc_utilities/bin/python3
+#!/apps/services/ycrc_utilities/bin/python3
 
 import argparse
 from config import PROM_SERVER
