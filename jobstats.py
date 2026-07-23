@@ -13,6 +13,8 @@ import syslog
 import config as c
 if c.EXTERNAL_DB_CONFIG.get("enabled", False):
     from db_handler import JobstatsDBHandler
+if getattr(c, "DRUID_CONFIG", {}).get("enabled", False):
+    from druid_handler import DruidHandler
 if not hasattr(c, "GPU_EXPORTER_JOBID"):
     c.GPU_EXPORTER_JOBID = False
 
@@ -204,6 +206,18 @@ class Jobstats:
                                 self.debug_print(mg)
                         except Exception as e:
                             self.debug_print(f"Failed to retrieve from external database: {e}")
+
+                    # If still no data and Druid read-back is enabled, try Druid.
+                    # This recovers jobs that have aged out of Prometheus. It is
+                    # inside the (not force_recalc) else, so `jobstats -f` skips it
+                    # and recomputes from Prometheus instead.
+                    if (not self.data or self.data == '') and getattr(c, "DRUID_CONFIG", {}).get("enabled", False):
+                        try:
+                            self.data = DruidHandler().get_jobstats(self.cluster, self.jobidraw)
+                            if self.data:
+                                self.debug_print(f"Retrieved job data from Druid for job {self.jobidraw}")
+                        except Exception as e:
+                            self.debug_print(f"Failed to retrieve from Druid: {e}")
 
                 self.user         = i.get('User', None)
                 self.account      = i.get('Account', None)

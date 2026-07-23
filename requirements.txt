@@ -1,0 +1,13 @@
+# Runtime dependencies for the jobstats command and its pipelines.
+requests>=2.20        # Prometheus + Druid queries
+blessed>=1.17         # optional: coloring/styling of the report
+
+# Kafka -> Druid utilization pipeline (kafka_handler.py / jobstats_kafka.py)
+kafka-python>=2.0
+
+# External MariaDB/MySQL storage (only if EXTERNAL_DB_CONFIG["enabled"] = True)
+# mysqlclient>=2.0
+
+# Test suite
+# pytest>=7
+# pytest-mock>=3

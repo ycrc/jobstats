@@ -1,0 +1,43 @@
+{
+  "type": "kafka",
+  "spec": {
+    "dataSchema": {
+      "dataSource": "slurm_jobstats",
+      "timestampSpec": { "column": "@end", "format": "iso", "missingValue": null },
+      "dimensionsSpec": {
+        "dimensions": [
+          { "type": "string", "name": "cluster", "createBitmapIndex": true },
+          { "type": "long",   "name": "jobid",   "createBitmapIndex": false },
+          { "type": "long",   "name": "schema_version", "createBitmapIndex": false },
+          { "type": "string", "name": "status",  "createBitmapIndex": true },
+          { "type": "double", "name": "cpu_seconds_used" },
+          { "type": "double", "name": "cpu_efficiency_pct" },
+          { "type": "long",   "name": "mem_used_bytes" },
+          { "type": "long",   "name": "mem_alloc_bytes" },
+          { "type": "double", "name": "mem_efficiency_pct" },
+          { "type": "long",   "name": "gpu_count" },
+          { "type": "double", "name": "gpu_util_mean_pct" },
+          { "type": "long",   "name": "gpu_mem_used_bytes" },
+          { "type": "long",   "name": "gpu_mem_total_bytes" },
+          { "type": "string", "name": "js1", "createBitmapIndex": false }
+        ],
+        "dimensionExclusions": [ "__time", "@end" ]
+      },
+      "metricsSpec": [],
+      "granularitySpec": {
+        "type": "uniform",
+        "segmentGranularity": "DAY",
+        "queryGranularity": "none",
+        "rollup": false
+      }
+    },
+    "ioConfig": {
+      "type": "kafka",
+      "topic": "slurm_jobstats",
+      "consumerProperties": { "bootstrap.servers": "kafka.ycrc.yale.edu:9092" },
+      "inputFormat": { "type": "json" },
+      "useEarliestOffset": true
+    },
+    "tuningConfig": { "type": "kafka" }
+  }
+}
