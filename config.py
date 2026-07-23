@@ -186,9 +186,10 @@ NOTES.append((condition, note, style))
 # P L A I N   N O T E S #
 #########################
 
-# example of a simple note that is always displayed
+# always-displayed footer: link to the graphical job-efficiency report
 condition = 'True'
-#note = ('f"To view a graphical report of this job's performance click here: https://ood-{os.getenv('CLUSTER')}.ycrc.yale.edu/pun/sys/ycrc_userportal/jobefficiency/{self.js.jobid} \nHave a nice day!"')
-note = f"Have a nice day!"
+note = ("To view a graphical report of this job's performance, see:",
+        'f"https://ood-{self.js.cluster}.ycrc.yale.edu/pun/sys/ycrc_userportal/jobefficiency/{self.js.jobid}"',
+        "Have a nice day!")
 style = "normal"
 NOTES.append((condition, note, style))
