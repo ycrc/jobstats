@@ -134,7 +134,7 @@ note = ('f"The overall CPU utilization of this job is {ceff}%. This value "' \
         'f"is{somewhat}low compared to the target range of "' \
         'f"90% and above. Please investigate the reason for the low efficiency. "' \
         '"For instance, have you conducted a scaling analysis? For more info:"',
-        'f"https://ood-{self.js.cluster}.ycrc.yale.edu/pun/sys/ycrc_userportal/jobefficiency/{self.js.jobid}"')
+        "https://docs.ycrc.yale.edu")
 style = "bold-red"
 NOTES.append((condition, note, style))
 
@@ -145,7 +145,7 @@ note = ('f"The overall CPU utilization of this job is {ceff}%. This value "' \
         'f"is{somewhat}low compared to the target range of "' \
         'f"90% and above. Please investigate the reason for the low efficiency. "' \
         '"For more info:"',
-        'f"https://ood-{self.js.cluster}.ycrc.yale.edu/pun/sys/ycrc_userportal/jobefficiency/{self.js.jobid}"')
+        "https://docs.ycrc.yale.edu")
 style = "bold-red"
 NOTES.append((condition, note, style))
 
