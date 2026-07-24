@@ -25,33 +25,38 @@ sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 
 DEVNULL = open(os.devnull, "w")
 
+# Terminal job states to enumerate -- excludes PENDING/RUNNING/SUSPENDED/REQUEUED
+# etc. so those never enter the list. Extend via $JOBSTATS_KAFKA_STATES if needed.
+TERMINAL_STATES = os.environ.get("JOBSTATS_KAFKA_STATES", "CD,F,CA,TO,OOM,NF,BF,DL,PR")
+
 
 def enumerate_jobids(cluster, start, end):
     """Return raw job ids that finished in [start, end] for a cluster.
 
-    Uses `sacct --duplicates` so every run of a requeued job is considered (a
-    requeued job keeps its id but produces a separate record per run), and
-    excludes jobs that are still PENDING/RUNNING or have not yet ended. Ids are
-    de-duplicated preserving order. `start`/`end` are sacct time strings
-    (e.g. "now-1hours", "2026-07-23T00:00:00").
+    Filters at the sacct level with `-s TERMINAL_STATES`, so pending/running jobs
+    are never returned. Uses `--duplicates` so every run of a requeued job is
+    considered (a requeued job keeps its id but produces a separate record per
+    run). Ids are de-duplicated preserving order. `start`/`end` are sacct time
+    strings (e.g. "now-1hours", "2026-07-23T00:00:00").
 
     Note: jobstats itself reports the *latest* run of a given id, so a requeued
     job yields one record (its most recent run), not one per run.
     """
     cmd = ["sacct", "-X", "-n", "-P", "-a", "--duplicates",
-           "-S", start, "-E", end, "-o", "JobIDRaw,State,End", "-M", cluster]
+           "-s", TERMINAL_STATES, "-S", start, "-E", end,
+           "-o", "JobIDRaw,End", "-M", cluster]
     out = subprocess.check_output(cmd, stderr=DEVNULL).decode("utf-8")
     ordered, seen = [], set()
     for line in out.splitlines():
         parts = line.strip().split("|")
-        if len(parts) < 3:
+        if len(parts) < 2:
             continue
-        jobidraw, state, jend = parts[0], parts[1].upper(), parts[2].strip().upper()
-        if state.startswith(("RUNNING", "PENDING")) or jend in ("", "UNKNOWN"):
+        jobidraw, jend = parts[0], parts[1].strip().upper()
+        # safety net: skip anything without a real end time
+        if not jobidraw or jend in ("", "UNKNOWN") or jobidraw in seen:
             continue
-        if jobidraw and jobidraw not in seen:
-            seen.add(jobidraw)
-            ordered.append(jobidraw)
+        seen.add(jobidraw)
+        ordered.append(jobidraw)
     return ordered
 
 
