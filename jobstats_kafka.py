@@ -29,89 +29,64 @@ sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 DEVNULL = open(os.devnull, "w")
 
 
-def _chunks(seq, n):
-    """Yield successive n-sized chunks of seq (to keep `sacct -j` arg lists sane)."""
-    for i in range(0, len(seq), n):
-        yield seq[i:i + n]
-
-
 def enumerate_jobids(cluster, start, end, min_elapsed):
     """Return raw job ids that FINISHED in [start, end] and ran long enough to
     have Prometheus data.
 
-    Requeued array tasks are the tricky case: a single JobIDRaw can carry both a
-    past *terminal* record (e.g. PREEMPTED, real End) **and** a current PENDING
-    record (End=Unknown). A *windowed* sacct (`-S/-E`) returns the terminal
-    record -- the pending one has no time overlap with the window -- but
-    `jobstats -j <id>` resolves the job with **no** window and sees the *current*
-    (pending) record, then fails on it. So we resolve in two phases to match
-    exactly what jobstats will see:
+    A single windowed sacct read (no `-s`, no `--duplicates`) -- fast, one call.
+    We keep ids whose windowed record has a real past End and ran >= min_elapsed;
+    still-running jobs have End=Unknown and drop out, and short jobs (no
+    Prometheus data) are skipped.
 
-      1. windowed query -> candidate ids that had activity in [start, end].
-      2. an *unwindowed* `-j <candidates>` query -> the current record per id
-         (the same record jobstats resolves; no `-s`, no `--duplicates`). Keep
-         only ids whose current record has a real past End and ran
-         >= min_elapsed.
-
-    A job that was requeued and is pending/running again has End=Unknown in phase
-    2 and is dropped, so we never hand jobstats a pending job. Jobs shorter than
-    `min_elapsed` (no Prometheus data) are skipped too. `start`/`end` are sacct
-    time strings (e.g. "now-1hours").
+    We deliberately do NOT try to pre-detect requeued jobs here. A requeued task
+    can show a past terminal record in the window (e.g. PREEMPTED) while its
+    *current* record -- the one `jobstats -j` resolves unwindowed -- is PENDING.
+    Rather than pay for an expensive unwindowed `sacct -j` to catch that, we let
+    jobstats reject it: it bails early (during job lookup, before any Prometheus
+    query) with a "PENDING job" message that main() classifies as a quiet skip.
+    `start`/`end` are sacct time strings (e.g. "now-1hours").
     """
     # %s so End/Elapsed are integers we can range-check.
     env = dict(os.environ, SLURM_TIME_FORMAT="%s")
-    now = int(time.time())
-
-    # Phase 1: which ids had any activity in the window.
     cmd = ["sacct", "-X", "-n", "-P", "-a", "-S", start, "-E", end,
-           "-o", "JobIDRaw", "-M", cluster]
+           "-o", "JobIDRaw,ElapsedRaw,End", "-M", cluster]
     out = subprocess.check_output(cmd, stderr=DEVNULL, env=env).decode("utf-8")
-    candidates, seen = [], set()
+    now = int(time.time())
+    ordered, seen = [], set()
     for line in out.splitlines():
-        jid = line.strip().split("|")[0]
-        if jid and jid not in seen:
-            seen.add(jid)
-            candidates.append(jid)
-    if not candidates:
-        return []
-
-    # Phase 2: resolve each candidate's *current* record the way jobstats does
-    # (unwindowed, no -s, no --duplicates) and keep only genuinely-finished,
-    # long-enough jobs.
-    ordered, kept = [], set()
-    for chunk in _chunks(candidates, 1000):
-        cmd = ["sacct", "-X", "-n", "-P", "-j", ",".join(chunk),
-               "-o", "JobIDRaw,ElapsedRaw,End", "-M", cluster]
-        out = subprocess.check_output(cmd, stderr=DEVNULL, env=env).decode("utf-8")
-        for line in out.splitlines():
-            parts = line.strip().split("|")
-            if len(parts) < 3:
-                continue
-            jobidraw, elapsed, jend = parts[0], parts[1], parts[2]
-            # not finished (pending/running/requeued-again have End=Unknown)
-            if not jend.isdigit() or int(jend) > now:
-                continue
-            # too short to have Prometheus data
-            if not elapsed.isdigit() or int(elapsed) < min_elapsed:
-                continue
-            if jobidraw and jobidraw not in kept:
-                kept.add(jobidraw)
-                ordered.append(jobidraw)
+        parts = line.strip().split("|")
+        if len(parts) < 3:
+            continue
+        jobidraw, elapsed, jend = parts[0], parts[1], parts[2]
+        # not finished (running jobs have End=Unknown)
+        if not jend.isdigit() or int(jend) > now:
+            continue
+        # too short to have Prometheus data
+        if not elapsed.isdigit() or int(elapsed) < min_elapsed:
+            continue
+        if jobidraw and jobidraw not in seen:
+            seen.add(jobidraw)
+            ordered.append(jobidraw)
     return ordered
 
 
-def _is_nodata(msg):
-    """True if a jobstats error just means the job had no utilization data.
+def _is_expected_skip(msg):
+    """True if a jobstats error is an expected 'nothing to emit' case, not a bug.
 
-    jobstats calls sys.exit(1) both for genuinely-empty jobs (short/old jobs,
-    exporter gaps -- expected, and slurm_accounting still has the job) and for
-    real failures (Prometheus/query errors, lookup failures). We only want to
-    quietly skip the former; the latter should be surfaced.
+    jobstats calls sys.exit(1) for several situations. Some are expected and
+    slurm_accounting still has the job, so a missing utilization row is fine:
+      - genuinely-empty jobs (short/old jobs, exporter gaps): "no data was found"
+      - very short jobs that only get seff output
+      - a requeued task whose current record is PENDING (jobstats resolves the
+        job unwindowed and sees the pending record): "...it is a PENDING job."
+    Everything else (Prometheus/query errors, lookup failures) is a real failure
+    we want to surface.
     """
     m = msg.lower()
     return ("no data was found" in m
             or "no job statistics" in m
-            or "very short" in m)
+            or "very short" in m
+            or "pending job" in m)
 
 
 def main():
@@ -168,7 +143,7 @@ def main():
             records.append(handler.build_record(js))
         except (Exception, SystemExit):
             msg = err.getvalue().strip()
-            if _is_nodata(msg):
+            if _is_expected_skip(msg):
                 skipped += 1  # slurm_accounting still has the job; no util row needed
             else:
                 failures += 1
@@ -185,7 +160,8 @@ def main():
         handler.close()
 
     if skipped:
-        print(f"skipped {skipped} job(s) with no utilization data", file=sys.stderr)
+        print(f"skipped {skipped} job(s) with no utilization data (short/old/pending)",
+              file=sys.stderr)
     sys.exit(1 if failures else 0)
 
 
