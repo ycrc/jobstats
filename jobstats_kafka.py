@@ -15,6 +15,7 @@ also usable standalone for testing / backfill.
     jobstats_kafka --cluster bouchet --start 2026-07-23T00:00:00 --end 2026-07-24T00:00:00
 """
 import argparse
+import contextlib
 import os
 import subprocess
 import sys
@@ -26,38 +27,39 @@ sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 
 DEVNULL = open(os.devnull, "w")
 
-# Terminal job states to enumerate -- excludes PENDING/RUNNING/SUSPENDED/REQUEUED
-# etc. so those never enter the list. Extend via $JOBSTATS_KAFKA_STATES if needed.
-TERMINAL_STATES = os.environ.get("JOBSTATS_KAFKA_STATES", "CD,F,CA,TO,OOM,NF,BF,DL,PR")
 
+def enumerate_jobids(cluster, start, end, min_elapsed):
+    """Return raw job ids that FINISHED in [start, end] and ran long enough to
+    have Prometheus data.
 
-def enumerate_jobids(cluster, start, end):
-    """Return raw job ids that finished in [start, end] for a cluster.
-
-    Filters at the sacct level with `-s TERMINAL_STATES` so only finished jobs
-    come back (no PENDING/RUNNING). We deliberately do NOT pass `--duplicates`:
-    `jobstats -j <id>` reports an id's *current* record, so surfacing an older
-    completed run of an id that is now pending/running again only makes jobstats
-    fail on the current pending state. One row per id (its latest run) is exactly
-    what jobstats can report. `start`/`end` are sacct time strings
-    (e.g. "now-1hours", "2026-07-23T00:00:00").
+    We read sacct exactly like `jobstats -j` does -- **no** `-s` and **no**
+    `--duplicates` -- so we see the *latest* record per id (the same one jobstats
+    will). A finished job has a real end time in the past; a pending/running or
+    requeued-then-pending id has End=Unknown and is dropped. This is why we must
+    NOT use `-s`: it would match an id's older completed run even though its
+    current record is pending, and jobstats would then fail on that pending
+    state. Jobs shorter than `min_elapsed` (no Prometheus data) are skipped too.
+    `start`/`end` are sacct time strings (e.g. "now-1hours").
     """
-    # %s so End is an epoch we can range-check; a finished job's End is in the past.
+    # %s so End/Elapsed are integers we can range-check.
     env = dict(os.environ, SLURM_TIME_FORMAT="%s")
-    cmd = ["sacct", "-X", "-n", "-P", "-a", "-s", TERMINAL_STATES,
-           "-S", start, "-E", end, "-o", "JobIDRaw,End", "-M", cluster]
+    cmd = ["sacct", "-X", "-n", "-P", "-a", "-S", start, "-E", end,
+           "-o", "JobIDRaw,ElapsedRaw,End", "-M", cluster]
     out = subprocess.check_output(cmd, stderr=DEVNULL, env=env).decode("utf-8")
     now = int(time.time())
     ordered, seen = [], set()
     for line in out.splitlines():
         parts = line.strip().split("|")
-        if len(parts) < 2:
+        if len(parts) < 3:
             continue
-        jobidraw, jend = parts[0], parts[1].strip()
-        # safety net: a finished job has a real end time in the past
-        if not jobidraw or not jend.isdigit() or int(jend) > now:
+        jobidraw, elapsed, jend = parts[0], parts[1], parts[2]
+        # not finished (pending/running/requeued have End=Unknown)
+        if not jend.isdigit() or int(jend) > now:
             continue
-        if jobidraw not in seen:
+        # too short to have Prometheus data
+        if not elapsed.isdigit() or int(elapsed) < min_elapsed:
+            continue
+        if jobidraw and jobidraw not in seen:
             seen.add(jobidraw)
             ordered.append(jobidraw)
     return ordered
@@ -71,7 +73,8 @@ def main():
                         help="Raw Slurm job id (repeatable).")
     parser.add_argument("--start", default=None,
                         help="Window mode: enumerate jobs that finished since this "
-                             "sacct time (e.g. now-1hours). Excludes pending/running jobs.")
+                             "sacct time (e.g. now-1hours). Excludes pending/running "
+                             "and jobs too short to have Prometheus data.")
     parser.add_argument("--end", default="now",
                         help="End of the enumeration window (sacct time; default now).")
     parser.add_argument("--dry-run", action="store_true",
@@ -85,30 +88,32 @@ def main():
     if not cluster:
         parser.error("no cluster given and neither SLURM_CLUSTER_NAME nor CLUSTER is set")
 
-    # Collect the job ids: explicit --jobid plus the window enumeration.
-    jobids, seen = [], set()
-    for jid in [str(j) for j in args.jobid] + (
-            enumerate_jobids(cluster, args.start, args.end) if args.start else []):
-        if jid not in seen:
-            seen.add(jid)
-            jobids.append(jid)
-
     # config.PROM_SERVER is built from $CLUSTER at import time, so set it first.
     os.environ["CLUSTER"] = cluster
     import config
     from jobstats import Jobstats
     from kafka_handler import JobstatsKafkaHandler
 
+    # Collect the job ids: explicit --jobid plus the window enumeration.
+    jobids, seen = [], set()
+    enumerated = enumerate_jobids(cluster, args.start, args.end,
+                                  2 * config.SAMPLING_PERIOD) if args.start else []
+    for jid in [str(j) for j in args.jobid] + enumerated:
+        if jid not in seen:
+            seen.add(jid)
+            jobids.append(jid)
+
     handler = JobstatsKafkaHandler()
     records = []
     failures = 0
     for jobid in jobids:
-        # jobstats calls sys.exit(1) (SystemExit) for jobs with no Prometheus
-        # data (too old / too short), so catch that too -- one such job must not
-        # abort a backfill of many. Such jobs simply produce no record.
+        # jobstats prints to stdout (e.g. seff for very short jobs) and sys.exit()s
+        # (SystemExit) for jobs with no Prometheus data; suppress its console output
+        # and catch the exit so one bad job never aborts a batch or leaks noise.
         try:
-            js = Jobstats(jobid=jobid, cluster=cluster,
-                          prom_server=config.PROM_SERVER, force_recalc=True)
+            with contextlib.redirect_stdout(DEVNULL), contextlib.redirect_stderr(DEVNULL):
+                js = Jobstats(jobid=jobid, cluster=cluster,
+                              prom_server=config.PROM_SERVER, force_recalc=True)
             records.append(handler.build_record(js))
         except (Exception, SystemExit) as e:
             failures += 1
