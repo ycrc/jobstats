@@ -18,6 +18,7 @@ import argparse
 import os
 import subprocess
 import sys
+import time
 
 # Resolve the script's real location (through a symlink) so we can import the
 # jobstats modules that live alongside it.
@@ -33,30 +34,32 @@ TERMINAL_STATES = os.environ.get("JOBSTATS_KAFKA_STATES", "CD,F,CA,TO,OOM,NF,BF,
 def enumerate_jobids(cluster, start, end):
     """Return raw job ids that finished in [start, end] for a cluster.
 
-    Filters at the sacct level with `-s TERMINAL_STATES`, so pending/running jobs
-    are never returned. Uses `--duplicates` so every run of a requeued job is
-    considered (a requeued job keeps its id but produces a separate record per
-    run). Ids are de-duplicated preserving order. `start`/`end` are sacct time
-    strings (e.g. "now-1hours", "2026-07-23T00:00:00").
-
-    Note: jobstats itself reports the *latest* run of a given id, so a requeued
-    job yields one record (its most recent run), not one per run.
+    Filters at the sacct level with `-s TERMINAL_STATES` so only finished jobs
+    come back (no PENDING/RUNNING). We deliberately do NOT pass `--duplicates`:
+    `jobstats -j <id>` reports an id's *current* record, so surfacing an older
+    completed run of an id that is now pending/running again only makes jobstats
+    fail on the current pending state. One row per id (its latest run) is exactly
+    what jobstats can report. `start`/`end` are sacct time strings
+    (e.g. "now-1hours", "2026-07-23T00:00:00").
     """
-    cmd = ["sacct", "-X", "-n", "-P", "-a", "--duplicates",
-           "-s", TERMINAL_STATES, "-S", start, "-E", end,
-           "-o", "JobIDRaw,End", "-M", cluster]
-    out = subprocess.check_output(cmd, stderr=DEVNULL).decode("utf-8")
+    # %s so End is an epoch we can range-check; a finished job's End is in the past.
+    env = dict(os.environ, SLURM_TIME_FORMAT="%s")
+    cmd = ["sacct", "-X", "-n", "-P", "-a", "-s", TERMINAL_STATES,
+           "-S", start, "-E", end, "-o", "JobIDRaw,End", "-M", cluster]
+    out = subprocess.check_output(cmd, stderr=DEVNULL, env=env).decode("utf-8")
+    now = int(time.time())
     ordered, seen = [], set()
     for line in out.splitlines():
         parts = line.strip().split("|")
         if len(parts) < 2:
             continue
-        jobidraw, jend = parts[0], parts[1].strip().upper()
-        # safety net: skip anything without a real end time
-        if not jobidraw or jend in ("", "UNKNOWN") or jobidraw in seen:
+        jobidraw, jend = parts[0], parts[1].strip()
+        # safety net: a finished job has a real end time in the past
+        if not jobidraw or not jend.isdigit() or int(jend) > now:
             continue
-        seen.add(jobidraw)
-        ordered.append(jobidraw)
+        if jobidraw not in seen:
+            seen.add(jobidraw)
+            ordered.append(jobidraw)
     return ordered
 
 

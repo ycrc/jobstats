@@ -24,8 +24,8 @@ independent of the `AdminComment` / external-DB storage paths — no Slurm datab
   query) and sends the record. The compute-node epilog `slurm/epilog.d/jobstats_kafka.sh` drives it live
   (synchronously, under a hard `timeout`, once per job). It also runs standalone for testing/backfill,
   either by explicit id (`--jobid`, repeatable, with `--dry-run` to preview) or by window
-  (`--start now-1hours [--end now]`), which enumerates finished jobs via `sacct --duplicates` (excluding
-  pending/running) — handy for an hourly timer until the epilog is deployed.
+  (`--start now-1hours [--end now]`), which enumerates finished jobs via `sacct -s` (terminal states only,
+  latest run per id) — handy for an hourly timer until the epilog is deployed.
 - The Druid Kafka supervisor spec lives at `druid/slurm_jobstats_supervisor.json` (POST it to
   `/druid/indexer/v1/supervisor`). `rollup:false`, so dedup re-emitted rows at query time with
   `LATEST_BY(...)` over `(cluster, jobid, __time)`.
