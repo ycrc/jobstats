@@ -16,6 +16,7 @@ also usable standalone for testing / backfill.
 """
 import argparse
 import contextlib
+import datetime
 import io
 import os
 import subprocess
@@ -150,18 +151,25 @@ def main():
                 print(f"ERROR: job {jobid} on {cluster}: {msg or 'unknown error'}",
                       file=sys.stderr)
 
+    sent = 0
     try:
         if records:
             handler.send(records, dry_run=args.dry_run)
+            sent = len(records)
     except Exception as e:
         failures += 1
         print(f"ERROR: failed to produce to Kafka: {e}", file=sys.stderr)
     finally:
         handler.close()
 
-    if skipped:
-        print(f"skipped {skipped} job(s) with no utilization data (short/old/pending)",
-              file=sys.stderr)
+    # One-line summary per run so a cron log isn't silent: local timestamp, the
+    # window (or explicit job count), and how many records went out / were
+    # skipped (short/old/pending) / errored.
+    ts = datetime.datetime.now().isoformat(timespec="seconds")
+    scope = f"start={args.start} end={args.end}" if args.start else f"jobids={len(jobids)}"
+    verb = "would_send" if args.dry_run else "sent"
+    print(f"[{ts}] {cluster} {scope} {verb}={sent} skipped={skipped} errors={failures}")
+
     sys.exit(1 if failures else 0)
 
 
