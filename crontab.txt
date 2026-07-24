@@ -1,0 +1,1 @@
+*/5 * * * * export CLUSTER=bouchet; export PATH=/apps/bin:/opt/slurm/current/bin:/usr/bin; /home/tl397/ycrc/jobstats/jobstats_kafka.py --start now-5minutes >> /home/tl397/ycrc/jobstats/kafka.log 2>&1
