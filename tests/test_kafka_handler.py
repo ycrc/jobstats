@@ -26,10 +26,10 @@ def _js1(nodes, gpus, total_time):
 
 
 def _make(mocker, jobid, start, end, tres, admincomment,
-          ncpus="4", noop_prom=False):
+          ncpus="4", noop_prom=False, timelimitraw="1440"):
     row = "|".join([jobid, start, end, "bouchet", tres, admincomment, "aturing",
                     "physics", "COMPLETED", "1", ncpus, "8G", "day", "common",
-                    "1440", "myjob"]) + "\n"
+                    timelimitraw, "myjob"]) + "\n"
     sacct_bytes = bytes(COLS + row, "utf-8")
 
     def side_effect(mylist, stderr=DEVNULL):
@@ -57,6 +57,22 @@ def test_cpu_job(mocker):
     assert rec["jobid"] == 10920562 and isinstance(rec["jobid"], int)
     assert rec["@end"] == datetime.datetime.fromtimestamp(
         1000007200, tz=datetime.timezone.utc).replace(tzinfo=None).isoformat()
+    assert rec["@start"] == datetime.datetime.fromtimestamp(
+        1000000000, tz=datetime.timezone.utc).replace(tzinfo=None).isoformat()
+
+    # v2 dimensions, denormalized from the same sacct read (no join needed)
+    assert rec["schema_version"] == 2
+    assert rec["username"] == "aturing"
+    assert rec["account"] == "physics"
+    assert rec["partition"] == "common"
+    assert rec["qos"] == "day"
+    assert rec["state"] == "COMPLETED"
+    assert rec["elapsed"] == 7200
+    assert rec["total_cpus"] == 4
+    assert rec["total_nodes"] == 1
+    assert rec["time_limit"] == 86400        # sacct gives 1440 minutes
+    assert rec["tres_alloc"] == "billing=4,cpu=4,mem=8G,node=1"
+
     assert rec["cpu_seconds_used"] == 14400.0
     assert rec["cpu_efficiency_pct"] == 50.0     # 14400 / (7200*4)
     assert rec["mem_efficiency_pct"] == 50.0
@@ -104,6 +120,7 @@ class _EmptyStats:
     """
     sp_node = {}
     diff = 7200
+    start = 1000000000
     end = 1000007200
     jobidraw = "10920565"
     cluster = "bouchet"
@@ -123,6 +140,24 @@ def test_nodata_record_is_defensive():
     assert rec["cpu_efficiency_pct"] is None
     assert rec["mem_efficiency_pct"] is None
     assert rec["js1"] == "JS1:None"
+    # A js object missing the sacct dimensions yields nulls, never an exception.
+    for field in ("username", "account", "partition", "qos", "state",
+                  "total_cpus", "total_nodes", "time_limit", "tres_alloc"):
+        assert rec[field] is None
+
+
+def test_unlimited_time_limit_is_null(mocker):
+    """sacct reports TimelimitRaw as 'UNLIMITED'/'Partition_Limit' when there is
+    no explicit limit; jobstats leaves it a string, so it must not be scaled."""
+    nodes = {"n1": {"cpus": 4, "total_time": 14400,
+                    "total_memory": 8589934592, "used_memory": 4294967296}}
+    js = _make(mocker, "10920566", "1000000000", "1000007200",
+               "billing=4,cpu=4,mem=8G,node=1", _js1(nodes, 0, 7200),
+               timelimitraw="UNLIMITED")
+    rec = JobstatsKafkaHandler().build_record(js)
+
+    assert rec["time_limit"] is None
+    assert rec["elapsed"] == 7200          # unaffected
 
 
 def test_send_dry_run_prints_and_sends_nothing(mocker, capsys):

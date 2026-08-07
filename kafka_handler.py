@@ -5,9 +5,21 @@ record (the queryable analytics data) plus the opaque JS1 blob (for report
 reconstruction by the Druid read-back). `send` produces it to the single YCRC
 Kafka broker as plain JSON, keyed by cluster:jobid:@end.
 
-Field names mirror the slurm_accounting datasource (@-prefixed Slurm timestamp,
+Field names mirror the slurm_accounting datasource (@-prefixed Slurm timestamps,
 `jobid` long, `cluster` string) so the two datasources join cleanly on
 (cluster, jobid, __time) where __time == @end == job end.
+
+Schema version 2 additionally denormalizes the job's own sacct dimensions
+(username, account, partition, qos, state, elapsed, total_cpus, total_nodes,
+time_limit, tres_alloc) so that grouped aggregates need no join at all. That
+join is not merely slow but unusable: Bouchet alone produces ~100k jobs/day and
+Druid rejects any subquery over 100k rows, so even a one-day job-level join
+fails outright. Rows written before the version-2 cutover carry nulls for these
+columns -- filter `WHERE schema_version = 2` when querying them.
+
+The opaque `js1` blob is unchanged and remains the point of the datasource for
+`jobstats <jobid>`: it is the only durable copy of a job's report once
+Prometheus retention expires (see druid_handler.py).
 """
 import datetime
 import json
@@ -24,6 +36,26 @@ def _iso_utc(epoch):
 
 def _pct(used, alloc):
     return round(100.0 * used / alloc, 1) if alloc else None
+
+
+def _int_or_none(v):
+    """sacct numeric fields arrive as strings; non-numeric sentinels return None.
+
+    TimelimitRaw in particular is 'UNLIMITED' or 'Partition_Limit' for jobs with
+    no explicit limit, and jobstats leaves those as the raw string.
+    """
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _str_or_none(v):
+    """Empty sacct fields become null, matching slurm_accounting's convention."""
+    if v is None:
+        return None
+    v = str(v).strip()
+    return v or None
 
 
 class JobstatsKafkaHandler:
@@ -47,11 +79,31 @@ class JobstatsKafkaHandler:
         else:
             status = "ok"
 
+        # Job dimensions, denormalized from the sacct read jobstats already does
+        # in __get_job_info(). These cost nothing extra and exist so aggregates
+        # never have to join slurm_accounting: a job-level join blows Druid's
+        # 100k subquery-row limit within a single day at Bouchet's job rate.
+        # Names and units mirror slurm_accounting so queries read the same
+        # against either datasource.
+        timelimit_min = _int_or_none(getattr(js, "timelimitraw", None))
+
         rec = {
-            "schema_version": 1,
+            "schema_version": 2,
             "cluster": js.cluster,
             "jobid": int(js.jobidraw),
             "@end": _iso_utc(js.end),
+            "@start": _iso_utc(js.start),
+            "username": _str_or_none(getattr(js, "user", None)),
+            "account": _str_or_none(getattr(js, "account", None)),
+            "partition": _str_or_none(getattr(js, "partition", None)),
+            "qos": _str_or_none(getattr(js, "qos", None)),
+            "state": _str_or_none(getattr(js, "state", None)),
+            "elapsed": int(js.diff),
+            "total_cpus": _int_or_none(getattr(js, "ncpus", None)),
+            "total_nodes": _int_or_none(getattr(js, "nnodes", None)),
+            # sacct reports TimelimitRaw in minutes; slurm_accounting stores seconds.
+            "time_limit": timelimit_min * 60 if timelimit_min is not None else None,
+            "tres_alloc": _str_or_none(getattr(js, "tres", None)),
             "cpu_seconds_used": None,
             "cpu_efficiency_pct": None,
             "mem_used_bytes": None,
