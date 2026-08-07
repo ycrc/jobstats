@@ -1,4 +1,4 @@
-#!/apps/services/jobstats_kafka/venv/bin/python3
+#!/apps/services/ycrc_utilities/bin/python3
 """Compute a job's jobstats utilization and publish it to Kafka (for Druid).
 
 Constructs a Jobstats object per job (one sacct + one Prometheus query, reusing
