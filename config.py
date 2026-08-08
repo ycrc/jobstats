@@ -43,8 +43,17 @@ KAFKA_CONFIG = {
 # Druid read-back: lets `jobstats <jobid>` reconstruct a report for jobs that
 # have aged out of Prometheus, by fetching the stored JS1 payload back from the
 # slurm_jobstats datasource (see druid_handler.py). No auth (network-restricted).
+#
+# Enabled per-cluster, derived from $CLUSTER the same way PROM_SERVER is above:
+# on where the pipeline runs and Druid is reachable, off everywhere else. Hopper
+# in particular is airgapped and has no Druid, so it must never default on.
+# $DRUID_ENABLED overrides in either direction (e.g. to test before rollout).
+DRUID_CLUSTERS = ("bouchet",)
 DRUID_CONFIG = {
-    "enabled": os.environ.get("DRUID_ENABLED", "false").lower() == "true",
+    "enabled": os.environ.get(
+        "DRUID_ENABLED",
+        "true" if os.getenv("CLUSTER") in DRUID_CLUSTERS else "false",
+    ).lower() == "true",
     "url": os.environ.get("DRUID_URL", "http://druid.ycrc.yale.edu:8888/druid/v2/sql"),
     "datasource": os.environ.get("DRUID_DATASOURCE", "slurm_jobstats"),
 }
