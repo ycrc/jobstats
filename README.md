@@ -6,9 +6,57 @@ This is a fork of the Princeton Jobstats Repo tuned for Yale CRC clusters.
 
 Main changes have been:
 
-- remove explicit references to Princeton clusters and infrastructure, and
-- replace `reqtres` with `alloctres`, which is a better metric for allocated resources
+- remove explicit references to Princeton clusters and infrastructure,
+- replace `reqtres` with `alloctres`, which is a better metric for allocated resources, and
+- add a Kafka → Druid export of per-job utilization plus a Druid read-back (see below).
 
+## Kafka → Druid utilization export (YCRC)
+
+We publish each job's utilization summary to Kafka so it can be joined against the `slurm_accounting`
+stream in Druid, and we read it back so old jobs still render after Prometheus ages them out. This is
+independent of the `AdminComment` / external-DB storage paths — no Slurm database writes.
+
+- **`kafka_handler.py`** builds a flat, typed JSON record from a computed `Jobstats` object (CPU/memory
+  efficiency, GPU utilization, `status`) plus the opaque `js1` blob for reconstruction, and produces it to
+  Kafka. Field names mirror `slurm_accounting` (`cluster`, `jobid`, and `@end` as an ISO naive-UTC
+  timestamp) so the datasources join on `(cluster, jobid, __time)` where `__time == @end == job end`.
+- **`jobstats_kafka.py`** is the entry point: it constructs a `Jobstats` (one sacct + one Prometheus
+  query) and sends the record. The compute-node epilog `slurm/epilog.d/jobstats_kafka.sh` drives it live
+  (synchronously, under a hard `timeout`, once per job). It also runs standalone for testing/backfill,
+  either by explicit id (`--jobid`, repeatable, with `--dry-run` to preview) or by window
+  (`--start now-1hours [--end now]`), which enumerates jobs that finished in the window (the latest record
+  per id, real past `End`, skipping jobs too short for Prometheus data) — handy for an hourly timer until
+  the epilog is deployed.
+- The Druid Kafka supervisor spec lives at `druid/slurm_jobstats_supervisor.json` (POST it to
+  `/druid/indexer/v1/supervisor`). `rollup:false`, so dedup re-emitted rows at query time with
+  `LATEST_BY(...)` over `(cluster, jobid, __time)`.
+- **`druid_handler.py`** lets `jobstats <jobid>` fetch the stored `js1` back from the `slurm_jobstats`
+  datasource when a job has aged out of Prometheus (`jobstats -f` bypasses it and recomputes).
+
+Configure it in `config.py` via `KAFKA_CONFIG` (`bootstrap_servers`, `topic`) and `DRUID_CONFIG`
+(`enabled`, `url`, `datasource`); all values are overridable through environment variables and there are
+no secrets. The producer has no enable flag — it emits whenever run, gated by deployment. `DRUID_CONFIG`
+does have `enabled` (default off) because the read-back runs inside the shared, user-facing `jobstats`.
+
+**Deployment (admin-only).** The producer is not user-facing, so rather than symlinking it onto users'
+`PATH` it lives in its own directory with its own venv, at the same path on every cluster:
+
+```
+/apps/services/jobstats_kafka/            # a checkout of this repo
+/apps/services/jobstats_kafka/venv/       # uv venv: requests + kafka-python
+```
+
+`jobstats_kafka.py`'s shebang points at that venv (`/apps/services/jobstats_kafka/venv/bin/python3`), and
+the epilog invokes `/apps/services/jobstats_kafka/jobstats_kafka.py` (override with `JOBSTATS_KAFKA_BIN`).
+Create the venv with:
+
+```
+uv venv /apps/services/jobstats_kafka/venv
+uv pip install --python /apps/services/jobstats_kafka/venv requests kafka-python
+```
+
+Because it imports the jobstats modules alongside it, keep this checkout on the same git ref as the
+user-facing one so `config.py`/`jobstats.py` don't drift. Do not deploy it on Hopper.
 
 The original README is found below. 
 

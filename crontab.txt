@@ -1,0 +1,13 @@
+# Example crontab entry for the Kafka -> Druid utilization pipeline.
+#
+# Windowed batch mode: every 5 minutes, publish utilization for jobs that
+# finished in the preceding 5 minutes. Windows do not overlap, so no query-time
+# dedup is needed -- but a failed run loses its window permanently, since there
+# is no retry and no overlap. Each run appends one summary line:
+#   [ts] cluster start=.. end=.. sent=N skipped=N errors=N
+# `skipped` covers short/old/pending jobs and is expected; `errors` means real
+# failures. Note that preempted (requeued) jobs are skipped by design.
+#
+# Replace JOBSTATS_DIR with the checkout path and set CLUSTER for the cluster.
+
+*/5 * * * * export CLUSTER=<cluster>; export PATH=/apps/bin:/opt/slurm/current/bin:/usr/bin; <JOBSTATS_DIR>/jobstats_kafka.py --start now-5minutes >> <JOBSTATS_DIR>/kafka.log 2>&1

@@ -30,6 +30,25 @@ EXTERNAL_DB_CONFIG = {
 #     "mirror_to_admin_comment": False,  # also write JS1 payload to AdminComment via sacctmgr
 }
 
+# Kafka producer for the jobstats -> Druid pipeline (see kafka_handler.py).
+# One network-restricted broker, no auth, plain JSON. Every cluster writes the
+# same topic; the "cluster" field on each record distinguishes rows. There is no
+# enable flag: the producer is a dedicated admin tool that emits whenever run,
+# gated by deployment (installed only where wanted -- e.g. not on Hopper).
+KAFKA_CONFIG = {
+    "bootstrap_servers": os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "kafka.ycrc.yale.edu:9092"),
+    "topic": os.environ.get("KAFKA_TOPIC", "slurm_jobstats"),
+}
+
+# Druid read-back: lets `jobstats <jobid>` reconstruct a report for jobs that
+# have aged out of Prometheus, by fetching the stored JS1 payload back from the
+# slurm_jobstats datasource (see druid_handler.py). No auth (network-restricted).
+DRUID_CONFIG = {
+    "enabled": os.environ.get("DRUID_ENABLED", "false").lower() == "true",
+    "url": os.environ.get("DRUID_URL", "http://druid.ycrc.yale.edu:8888/druid/v2/sql"),
+    "datasource": os.environ.get("DRUID_DATASOURCE", "slurm_jobstats"),
+}
+
 # number of seconds between measurements
 SAMPLING_PERIOD = 30
 
