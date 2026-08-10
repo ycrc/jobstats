@@ -56,6 +56,11 @@ DRUID_CONFIG = {
     ).lower() == "true",
     "url": os.environ.get("DRUID_URL", "http://druid.ycrc.yale.edu:8888/druid/v2/sql"),
     "datasource": os.environ.get("DRUID_DATASOURCE", "slurm_jobstats"),
+    # Query timeout in seconds. Sent to Druid in the query context, not just used
+    # as an HTTP client timeout: Druid keeps executing a query after the client
+    # hangs up, so this is what actually releases work on the single-node broker
+    # that also serves slurm_accounting.
+    "timeout": int(os.environ.get("DRUID_TIMEOUT", "10")),
 }
 
 # number of seconds between measurements

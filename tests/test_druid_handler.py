@@ -54,3 +54,36 @@ def test_empty_result_returns_none(mocker):
                        "datasource": "slurm_jobstats"}, clear=False)
     mocker.patch("druid_handler.requests.post", return_value=_FakeResp([]))
     assert DruidHandler().get_jobstats("bouchet", "123") is None
+
+
+def test_query_carries_a_server_side_timeout(mocker):
+    """Druid gets its own deadline, and the client waits longer than it.
+
+    A requests-level timeout only stops us waiting; the broker keeps executing
+    the query. The context timeout is what frees work on the single node that
+    also serves slurm_accounting.
+    """
+    mocker.patch.dict(druid_handler.DRUID_CONFIG,
+                      {"enabled": True, "url": "http://druid/sql",
+                       "datasource": "slurm_jobstats", "timeout": 10}, clear=False)
+    post = mocker.patch("druid_handler.requests.post",
+                        return_value=_FakeResp([]))
+
+    DruidHandler().get_jobstats("bouchet", "19264556")
+
+    kwargs = post.call_args.kwargs
+    # context timeout is milliseconds; requests' is seconds
+    assert kwargs["json"]["context"]["timeout"] == 10_000
+    assert kwargs["timeout"] > 10, "client must outlast Druid's own deadline"
+
+
+def test_timeout_is_configurable(mocker):
+    mocker.patch.dict(druid_handler.DRUID_CONFIG,
+                      {"enabled": True, "url": "http://druid/sql",
+                       "datasource": "slurm_jobstats", "timeout": 3}, clear=False)
+    post = mocker.patch("druid_handler.requests.post",
+                        return_value=_FakeResp([]))
+
+    DruidHandler().get_jobstats("bouchet", "19264556")
+
+    assert post.call_args.kwargs["json"]["context"]["timeout"] == 3_000

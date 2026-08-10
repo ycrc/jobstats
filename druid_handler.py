@@ -33,15 +33,26 @@ class DruidHandler:
             "WHERE cluster = ? AND jobid = ? AND js1 IS NOT NULL "
             "ORDER BY __time DESC LIMIT 1"
         )
+        timeout_s = int(DRUID_CONFIG.get("timeout", 10))
         payload = {
             "query": query,
             "parameters": [
                 {"type": "VARCHAR", "value": cluster},
                 {"type": "BIGINT", "value": jid},
             ],
+            # Give Druid its own deadline. An HTTP client timeout only stops us
+            # waiting -- the broker carries on executing a query nobody is
+            # listening for. This read-back is best-effort, so it should never
+            # outlive the caller's patience on a node that also serves
+            # slurm_accounting.
+            "context": {"timeout": timeout_s * 1000},
         }
         try:
-            resp = requests.post(DRUID_CONFIG["url"], json=payload, timeout=10)
+            # Wait a little longer than Druid's own deadline so the broker gets
+            # to return its timeout error, rather than us cutting the connection
+            # first and reporting a less useful client-side error.
+            resp = requests.post(DRUID_CONFIG["url"], json=payload,
+                                 timeout=timeout_s + 2)
             resp.raise_for_status()
             rows = resp.json()
         except Exception as e:
