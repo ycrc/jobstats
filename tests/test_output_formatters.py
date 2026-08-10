@@ -1,5 +1,4 @@
 import os
-import time
 from jobstats import Jobstats
 from output_formatters import ClassicOutput
 import pytest
@@ -8,7 +7,8 @@ import pytest
 DEVNULL = open(os.devnull, 'w')
 SLURM_VERSION = "25.11.5"
 
-fields = ["jobidraw",
+fields = ["jobid",
+          "jobidraw",
           "start",
           "end",
           "cluster",

@@ -8,7 +8,8 @@ from jobstats import Jobstats
 DEVNULL = open(os.devnull, 'w')
 SLURM_VERSION = "25.11.5"
 
-fields = ["jobidraw",
+fields = ["jobid",
+          "jobidraw",
           "start",
           "end",
           "cluster",
@@ -260,3 +261,97 @@ def test_gpu_utilization_missing(mocker, gpu_utilization_missing):
 
 def test_gpu_used_memory_missing(mocker, gpu_used_memory_missing):
     assert gpu_used_memory_missing.gpu_mem_error_code == 1
+
+
+# --- job arrays ---------------------------------------------------------
+#
+# `sacct -j N` returns every task of an array when N is the array job id,
+# because the last task scheduled inherits the array's own id as its raw id
+# (e.g. 19523264_6551 -> JobIDRaw 19523264). jobstats must pick the record it
+# was asked for rather than whichever one the sacct output happens to end on.
+
+ARRAY_COLS = ('JobID|JobIDRaw|Start|End|Cluster|AllocTRES|AdminComment|User|Account|'
+              'State|NNodes|NCPUS|ReqMem|QOS|Partition|TimelimitRaw|JobName\n')
+
+
+def _js1_blob(total_time):
+    """A well-formed JS1 payload, so constructing Jobstats never hits Prometheus."""
+    nodes = {"bouchet-r1n1": {"cpus": 8, "total_memory": 1073741824,
+                              "used_memory": 536870912, "total_time": total_time}}
+    js_data = {"gpus": 0, "nodes": nodes, "total_time": total_time}
+    raw = json.dumps(js_data, sort_keys=True, indent=4)
+    return "JS1:" + base64.b64encode(gzip.compress(raw.encode('ascii'))).decode('ascii')
+
+
+def _array_row(taskid, jobidraw, account, ncpus, admincomment=None):
+    """One `sacct -X` row of array 19523264. `account`/`ncpus` tag the row so a
+    test can tell which record jobstats actually kept."""
+    if admincomment is None:
+        admincomment = _js1_blob(3600.0)
+    return ('19523264_%s|%s|1730212549|1730216549|bouchet|billing=%s,cpu=%s,mem=10G,'
+            'node=1|%s|aturing|%s|COMPLETED|1|%s|10G|normal|day|1440|arrayjob\n'
+            % (taskid, jobidraw, ncpus, ncpus, admincomment, account, ncpus))
+
+
+def _array_sacct(mocker, rows, requested):
+    def side_effect(mylist, stderr=DEVNULL):
+        if mylist == ["sacct", "-V"]:
+            return bytes(f"slurm {SLURM_VERSION}\n", "utf-8")
+        elif mylist == ["sacct", "-P", "-X", "-o", fields, "-j", requested]:
+            return bytes(ARRAY_COLS + "".join(rows), "utf-8")
+    mocker.patch("subprocess.check_output", side_effect=side_effect)
+
+
+# the base-id task sorts last, as it does in real sacct output
+TASKS_BASE_LAST = [_array_row("0", "19691291", "decoy", "1"),
+                   _array_row("1", "19691292", "decoy", "1"),
+                   _array_row("2", "19691293", "decoy", "1"),
+                   _array_row("6551", "19523264", "physics", "8")]
+
+
+def test_array_base_id_selects_the_task_owning_that_raw_id(mocker):
+    _array_sacct(mocker, TASKS_BASE_LAST, "19523264")
+    stats = Jobstats(jobid="19523264", prom_server="DUMMY-SERVER")
+    assert stats.jobidraw == "19523264"
+    assert stats.account == "physics"
+    assert stats.ncpus == "8"
+
+
+def test_array_base_id_does_not_depend_on_row_order(mocker):
+    """Same array, base-id row first: the old last-row-wins loop returned a decoy."""
+    reordered = [TASKS_BASE_LAST[-1]] + TASKS_BASE_LAST[:-1]
+    _array_sacct(mocker, reordered, "19523264")
+    stats = Jobstats(jobid="19523264", prom_server="DUMMY-SERVER")
+    assert stats.jobidraw == "19523264"
+    assert stats.account == "physics"
+
+
+def test_array_task_form_selects_that_task(mocker):
+    _array_sacct(mocker, TASKS_BASE_LAST, "19523264_1")
+    stats = Jobstats(jobid="19523264_1", prom_server="DUMMY-SERVER")
+    assert stats.jobidraw == "19691292"
+    assert stats.account == "decoy"
+
+
+def test_array_lookup_does_not_amplify_druid_reads(mocker):
+    """One Druid read-back per lookup, not one per task in the array.
+
+    The read-back lives inside the sacct row loop, so before the filter a bare
+    array id issued a synchronous point query for every task -- thousands of
+    them for a large array, all but one discarded.
+    """
+    rows = [_array_row("0", "19691291", "decoy", "1", admincomment=""),
+            _array_row("1", "19691292", "decoy", "1", admincomment=""),
+            _array_row("2", "19691293", "decoy", "1", admincomment=""),
+            _array_row("6551", "19523264", "physics", "8", admincomment="")]
+    _array_sacct(mocker, rows, "19523264")
+    handler = mocker.MagicMock()
+    handler.get_jobstats.return_value = _js1_blob(3600.0)
+    mocker.patch("jobstats.DruidHandler", create=True, return_value=handler)
+    mocker.patch.dict("config.DRUID_CONFIG", {"enabled": True})
+
+    stats = Jobstats(jobid="19523264", prom_server="DUMMY-SERVER")
+
+    assert handler.get_jobstats.call_count == 1
+    handler.get_jobstats.assert_called_once_with("bouchet", "19523264")
+    assert stats.jobidraw == "19523264"

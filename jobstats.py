@@ -1,6 +1,5 @@
 import csv
 import os
-import re
 import subprocess
 import sys
 import time
@@ -54,7 +53,7 @@ class Jobstats:
                  force_recalc=False,
                  batch_script=False,
                  json_or_base64=False):
-        if self.slurm_version == None:
+        if self.slurm_version is None:
             self.slurm_version = subprocess.check_output(["sacct", "-V"], stderr=DEVNULL).decode("utf-8").split()[1]
             if int(self.slurm_version.split(".")[0]) > 25:
                 self.sluid_available = True
@@ -154,7 +153,8 @@ class Jobstats:
 
     # Get basic info from sacct and set instance variables
     def __get_job_info(self):
-        fields = ["jobidraw",
+        fields = ["jobid",
+                  "jobidraw",
                   "start",
                   "end",
                   "cluster",
@@ -183,7 +183,17 @@ class Jobstats:
         self.jobidraw = None
         try:
             sacct_output = subprocess.check_output(cmd, stderr=DEVNULL).decode("utf-8").split('\n')
+            target = str(self.jobid).strip()
             for i in csv.DictReader(sacct_output, delimiter='|'):
+                # `sacct -j N` returns EVERY task of an array when N is the array
+                # job id, because one task -- the last one scheduled -- inherits
+                # the array's own id as its raw id. Without this filter the loop
+                # walked all of them and kept whichever landed last, which also
+                # meant one Druid read-back (below) per task in the array.
+                # Keep only the record that was actually asked for, matching
+                # either a raw id or the array "N_i" form.
+                if target not in (i.get('JobIDRaw'), i.get('JobID')):
+                    continue
                 self.jobidraw     = i.get('JobIDRaw', None)
                 self.sluid        = i.get('SLUID', None)
                 self.start        = i.get('Start', None)
@@ -203,7 +213,7 @@ class Jobstats:
                             self.data = db_handler.get_jobstats(self.cluster, self.jobidraw)
                             if self.data:
                                 msg = f"Retrieved job data from external database for job {self.jobidraw}"
-                                self.debug_print(mg)
+                                self.debug_print(msg)
                         except Exception as e:
                             self.debug_print(f"Failed to retrieve from external database: {e}")
 
@@ -262,6 +272,9 @@ class Jobstats:
                                                  self.qos,
                                                  self.partition,
                                                  self.jobname))
+                # Raw ids are unique, so the match above is the only one; stop
+                # rather than scan the rest of a potentially huge array.
+                break
         except Exception:
             msg = (f"\nFailed to lookup job {self.jobid}. Make sure the cluster is correct by\n"
                    "specifying the -c option (e.g., $ jobstats 1234567 -c frontier).\n")
@@ -361,7 +374,7 @@ class Jobstats:
             return response.json()
         
         expanded_query = query.format(cluster=self.cluster, jobid=self.jobidraw, diff=int(self.diff))
-        if query_sluid and self.sluid != None:
+        if query_sluid and self.sluid is not None:
             expanded_query += " or " + query.format(cluster=self.cluster, jobid=self.sluid, diff=int(self.diff))
         self.debug_print("query=%s, time=%s" % (expanded_query,self.end))
         try:

@@ -11,7 +11,7 @@ DEVNULL = open(os.devnull, "w")
 SLURM_VERSION = "25.11.5"  # major 25 -> no sluid field
 
 FIELDS = ",".join([
-    "jobidraw", "start", "end", "cluster", "alloctres", "admincomment", "user",
+    "jobid", "jobidraw", "start", "end", "cluster", "alloctres", "admincomment", "user",
     "account", "state", "nnodes", "ncpus", "reqmem", "qos", "partition",
     "timelimitraw", "jobname",
 ])
