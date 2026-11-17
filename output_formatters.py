@@ -377,8 +377,9 @@ class ClassicOutput(BaseFormatter):
 
     def output_overall_detailed_gpu_metric(self, gm, max_len) -> str:
         """Return the overall utilization of the detailed GPU metric."""
+        # padding is needed by the error branches too, so compute it first
+        spaces = " " * (max_len - len(gm.name))
         if gm.error_code == 0:
-            spaces = " " * (max_len - len(gm.name))
             if self.js.is_mig_job():
                 # set utilization to 100 to avoid triggering low utilization notes
                 self.js.metric_utilization = 100

@@ -161,3 +161,66 @@ def test_output_overall_cpu_memory_usage(simple_stats):
     expected = "  CPU memory usage "
     expected += "[||||||||||||||||||||||||||                     52%]\n"
     assert actual == expected
+
+
+@pytest.fixture
+def partial_detailed_gpu_stats(mocker):
+    """A two-node GPU job where only one node reported a detailed GPU metric.
+
+    This happens when the GPU exporter on one node is down or hung while the
+    other node's exporter works (e.g. a1116u09n01 on Bouchet in 2026-11).
+    """
+    import base64
+    import gzip
+    import json
+
+    def gpu_node(with_detailed):
+        node = {"cpus": 4,
+                "total_memory": 42949672960,
+                "used_memory": 10737418240,
+                "total_time": 10000.0,
+                "gpu_total_memory": {"0": 161061273600},
+                "gpu_used_memory": {"0": 64424509440},
+                "gpu_utilization": {"0": 80.0}}
+        if with_detailed:
+            # the exporter stores fractions; jobstats multiplies by 100
+            node["fp64_util_percent_max"] = {"0": 0.42}
+        return node
+
+    js_data = {"gpus": 2,
+               "nodes": {"a1116u05n01": gpu_node(True),
+                         "a1116u09n01": gpu_node(False)},
+               "total_time": 3600}
+    blob = json.dumps(js_data, sort_keys=True)
+    ss64 = "JS1:" + base64.b64encode(gzip.compress(blob.encode("ascii"))).decode("ascii")
+
+    def side_effect(mylist, stderr=DEVNULL):
+        cols = ('JobIDRaw|Start|End|Cluster|AllocTRES|AdminComment|User|Account|'
+                'State|NNodes|NCPUS|ReqMem|QOS|Partition|TimelimitRaw|JobName\n')
+        data = ('900003|1763300000|1763303600|bouchet|billing=1,cpu=8,gres/gpu=2,'
+                'mem=80G,node=2|%s|someuser|someacct|COMPLETED|2|8|80G|normal|'
+                'gpu_b200|120|test\n' % ss64)
+        if mylist == ["sacct", "-V"]:
+            return bytes(f"slurm {SLURM_VERSION}\n", "utf-8")
+        return bytes(cols + data, "utf-8")
+
+    mocker.patch("subprocess.check_output", side_effect=side_effect)
+    mocker.patch.dict("config.DRUID_CONFIG", {"enabled": False})
+    mocker.patch("config.GPU_METRICS_EXPORTER", "NVML")
+    mocker.patch("config.GPU_METRICS",
+                 {"FP64 Max": {"metric": "fp64_util_percent",
+                               "operation": "max_over_time",
+                               "show_overall": True,
+                               "show_per_gpu": True,
+                               "write_to_db": True,
+                               "long_name": "FP64 (max) utilization"}})
+    return Jobstats(jobid="900003", prom_server="DUMMY-SERVER")
+
+
+def test_partial_detailed_gpu_metric(partial_detailed_gpu_stats):
+    """A metric missing on one node reports 'unknown' instead of crashing."""
+    gm = partial_detailed_gpu_stats.detailed_gpu_metrics[0]
+    assert gm.error_code == 1
+    assert gm.total__value_gpus[1] == 1  # one node did report a value
+    report = ClassicOutput(partial_detailed_gpu_stats).output(no_color=True)
+    assert "FP64 Max utilization  (Value is unknown)" in report
