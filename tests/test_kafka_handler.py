@@ -168,3 +168,58 @@ def test_send_dry_run_prints_and_sends_nothing(mocker, capsys):
     out = capsys.readouterr().out
     assert '"jobid": 1' in out
     produced.assert_not_called()
+
+
+def test_gpu_job_detailed_metrics(mocker):
+    """Detailed GPU metrics land in fixed flat columns, as the CLI shows them."""
+    nodes = {"g1": {"cpus": 8, "total_time": 28800,
+                    "total_memory": 68719476736, "used_memory": 34359738368,
+                    "gpu_utilization": {"0": 75.0, "1": 25.0},
+                    "gpu_used_memory": {"0": 10737418240, "1": 5368709120},
+                    "gpu_total_memory": {"0": 42949672960, "1": 42949672960},
+                    # the exporter stores fractions; jobstats scales them to percent
+                    "fp64_util_percent_max": {"0": 0.40, "1": 0.20},
+                    "fp32_util_percent_avg": {"0": 0.10, "1": 0.30},
+                    "any_tensor_util_percent_avg": {"0": 0.05, "1": 0.15}}}
+    js = _make(mocker, "10920566", "1000000000", "1000003600",
+               "billing=8,cpu=8,gres/gpu=2,mem=64G,node=1", _js1(nodes, 2, 3600),
+               ncpus="8")
+    rec = JobstatsKafkaHandler().build_record(js)
+
+    assert rec["schema_version"] == 2               # additive, no version bump
+    assert rec["gpu_fp64_max_pct"] == 30.0          # mean of per-GPU maxima
+    assert rec["gpu_fp32_mean_pct"] == 20.0
+    assert rec["gpu_tensor_mean_pct"] == 10.0
+    # metrics the job's blob lacks stay null and do not make the row partial
+    assert rec["gpu_sm_mean_pct"] is None
+    assert rec["gpu_fp16_max_pct"] is None
+    assert rec["status"] == "ok"
+
+
+def test_cpu_job_has_null_detailed_metrics(mocker):
+    nodes = {"n1": {"cpus": 4, "total_time": 14400,
+                    "total_memory": 8589934592, "used_memory": 4294967296}}
+    js = _make(mocker, "10920567", "1000000000", "1000007200",
+               "billing=4,cpu=4,mem=8G,node=1", _js1(nodes, 0, 7200))
+    rec = JobstatsKafkaHandler().build_record(js)
+    assert rec["gpu_fp64_max_pct"] is None
+    assert rec["gpu_fp32_mean_pct"] is None
+
+
+def test_every_record_field_is_a_druid_dimension(mocker):
+    """The supervisor silently drops fields missing from its dimensions list.
+
+    `@end` is the timestamp column, so it is not a dimension.
+    """
+    spec_path = os.path.join(os.path.dirname(__file__), "..", "druid",
+                             "slurm_jobstats_supervisor.json")
+    with open(spec_path) as f:
+        spec = json.load(f)
+    dims = {d["name"] for d in spec["spec"]["dataSchema"]["dimensionsSpec"]["dimensions"]}
+
+    nodes = {"n1": {"cpus": 4, "total_time": 14400,
+                    "total_memory": 8589934592, "used_memory": 4294967296}}
+    js = _make(mocker, "10920568", "1000000000", "1000007200",
+               "billing=4,cpu=4,mem=8G,node=1", _js1(nodes, 0, 7200))
+    rec = JobstatsKafkaHandler().build_record(js)
+    assert set(rec) - {"@end"} <= dims

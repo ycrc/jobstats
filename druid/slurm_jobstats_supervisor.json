@@ -30,6 +30,12 @@
           { "type": "double", "name": "gpu_util_mean_pct" },
           { "type": "long",   "name": "gpu_mem_used_bytes" },
           { "type": "long",   "name": "gpu_mem_total_bytes" },
+          { "type": "double", "name": "gpu_sm_mean_pct" },
+          { "type": "double", "name": "gpu_tensor_mean_pct" },
+          { "type": "double", "name": "gpu_fp16_max_pct" },
+          { "type": "double", "name": "gpu_fp32_mean_pct" },
+          { "type": "double", "name": "gpu_fp64_max_pct" },
+          { "type": "double", "name": "gpu_dram_bw_mean_pct" },
           { "type": "string", "name": "js1", "createBitmapIndex": false }
         ],
         "dimensionExclusions": [ "__time", "@end" ]

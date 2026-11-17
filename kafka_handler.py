@@ -17,6 +17,15 @@ Druid rejects any subquery over 100k rows, so even a one-day job-level join
 fails outright. Rows written before the version-2 cutover carry nulls for these
 columns -- filter `WHERE schema_version = 2` when querying them.
 
+Detailed GPU columns (gpu_sm_mean_pct ... gpu_dram_bw_mean_pct, added
+2026-11) come from upstream's NVML GPM metrics, available on Hopper and newer
+GPUs. They were added without a version bump, because several consumers filter
+`schema_version = 2` and a new version would drop every new row from them.
+Rows written before the cutover are null, so filter on `__time` instead.
+Each column is the job-level value the CLI shows: the mean across the job's
+GPUs of each GPU's avg or max over time. The FP columns count non-tensor math
+only; Tensor Core work of any precision is in gpu_tensor_mean_pct.
+
 The opaque `js1` blob is unchanged and remains the point of the datasource for
 `jobstats <jobid>`: it is the only durable copy of a job's report once
 Prometheus retention expires (see druid_handler.py).
@@ -27,6 +36,20 @@ import json
 import config as c
 
 SAMPLING_PERIOD = c.SAMPLING_PERIOD
+
+# Flat Druid column for each detailed GPU metric, keyed by (metric, operation)
+# as set in config.GPU_METRICS. The names are fixed on purpose: the Druid
+# supervisor drops any field not in its dimensions list, so a column must not
+# change name when the configuration changes. If config.GPU_METRICS uses a
+# different operation for a metric, its column stays null.
+DETAILED_GPU_COLUMNS = {
+    ("sm_util_percent", "avg_over_time"): "gpu_sm_mean_pct",
+    ("any_tensor_util_percent", "avg_over_time"): "gpu_tensor_mean_pct",
+    ("fp16_util_percent", "max_over_time"): "gpu_fp16_max_pct",
+    ("fp32_util_percent", "avg_over_time"): "gpu_fp32_mean_pct",
+    ("fp64_util_percent", "max_over_time"): "gpu_fp64_max_pct",
+    ("dram_bw_util_percent", "avg_over_time"): "gpu_dram_bw_mean_pct",
+}
 
 
 def _iso_utc(epoch):
@@ -113,6 +136,7 @@ class JobstatsKafkaHandler:
             "gpu_util_mean_pct": None,
             "gpu_mem_used_bytes": None,
             "gpu_mem_total_bytes": None,
+            **{col: None for col in DETAILED_GPU_COLUMNS.values()},
             "status": status,
             "js1": "JS1:" + js.report_job_json(encode=True),
         }
@@ -138,6 +162,18 @@ class JobstatsKafkaHandler:
             gpu_used, gpu_total = js.gpu_mem_total__used_alloc
             rec["gpu_mem_used_bytes"] = int(gpu_used)
             rec["gpu_mem_total_bytes"] = int(gpu_total)
+
+        # Detailed GPU metrics (NVML GPM). Same value as the CLI meter: the
+        # mean over GPUs of each GPU's value, already scaled to percent.
+        # Emitted only when every node reported the metric (error_code 0).
+        # These do not affect `status`: GPUs older than Hopper never report
+        # them, and that is not a collection failure.
+        if js.gpus:
+            for gm in getattr(js, "detailed_gpu_metrics", []):
+                col = DETAILED_GPU_COLUMNS.get((gm.metric, gm.operation))
+                total, gpu_n = gm.total__value_gpus
+                if col and gm.error_code == 0 and gpu_n:
+                    rec[col] = round(total / gpu_n, 1)
 
         return rec
 
