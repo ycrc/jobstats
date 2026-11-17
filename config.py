@@ -11,6 +11,7 @@ PROM_RETENTION_DAYS = 14
 # Set to True if GPU stats have jobid label as opposed to using nvidia_gpu_jobId
 # This is available as of version 0.2.2 Sept 2025 in the repo
 # https://github.com/plazonic/nvidia_gpu_prometheus_exporter/
+# Using nvidia_gpu_jobId is not recommended due to poor performance.
 GPU_EXPORTER_JOBID = True
 
 # If using Slurm database then include the lines below with "enabled": False
@@ -75,6 +76,99 @@ TIME_EFFICIENCY_RED   = 10  # percentage
 TIME_EFFICIENCY_BLACK = 60  # percentage
 MIN_MEMORY_USAGE      = 70  # percentage
 MIN_RUNTIME_SECONDS   = 10 * SAMPLING_PERIOD  # seconds
+
+
+################################################################################
+##                 D E T A I L E D    G P U    M E T R I C S                  ##
+################################################################################
+GPU_METRICS_EXPORTER = "NVML"  # choices are "None" or "NVML" (or "DCGM")
+GPU_METRICS_DOCS_URL = "https://princetonuniversity.github.io/jobstats/setup/detailed_gpu_metrics/"
+GPU_METRICS = {}
+GPU_METRICS["SM"] = {"metric": "sm_util_percent",
+                     "operation": "avg_over_time",
+                     "show_overall": True,
+                     "show_per_gpu": True,
+                     "write_to_db": True,
+                     "long_name": "Streaming Multiprocessor (SM) utilization"}
+GPU_METRICS["OCC"] = {"metric": "sm_occupancy_percent",
+                      "operation": "avg_over_time",
+                      "show_overall": True,
+                      "show_per_gpu": True,
+                      "write_to_db": True,
+                      "long_name": "Occupancy"}
+GPU_METRICS["TC"] = {"metric": "any_tensor_util_percent",
+                     "operation": "avg_over_time",
+                     "show_overall": True,
+                     "show_per_gpu": True,
+                     "write_to_db": True,
+                     "long_name": "Tensor Core (TC) utilization"}
+GPU_METRICS["INT"] = {"metric": "integer_util",
+                      "operation": "avg_over_time",
+                      "show_overall": True,
+                      "show_per_gpu": True,
+                      "write_to_db": True,
+                      "long_name": "INT utilization"}
+GPU_METRICS["FP16 Max"] = {"metric": "fp16_util_percent",
+                           "operation": "max_over_time",
+                           "show_overall": True,
+                           "show_per_gpu": True,
+                           "write_to_db": True,
+                           "long_name": "FP16 (max) utilization"}
+GPU_METRICS["FP32 Avg"] = {"metric": "fp32_util_percent",
+                           "operation": "avg_over_time",
+                           "show_overall": True,
+                           "show_per_gpu": True,
+                           "write_to_db": True,
+                           "long_name": "FP32 (avg) utilization"}
+GPU_METRICS["FP64 Max"] = {"metric": "fp64_util_percent",
+                           "operation": "max_over_time",
+                           "show_overall": True,
+                           "show_per_gpu": True,
+                           "write_to_db": True,
+                           "long_name": "FP64 (max) utilization"}
+GPU_METRICS["DRAM BW"] = {"metric": "dram_bw_util_percent",
+                          "operation": "avg_over_time",
+                          "show_overall": True,
+                          "show_per_gpu": True,
+                          "write_to_db": True,
+                          "long_name": "DRAM Bandwidth utilization"}
+GPU_METRICS["Power"] = {"metric": "power_usage_milliwatts",
+                        "operation": "avg_over_time",
+                        "show_overall": False,
+                        "show_per_gpu": True,
+                        "write_to_db": True,
+                        "long_name": "Power Usage"}
+GPU_METRICS["Temp"] = {"metric": "temperature_celsius",
+                       "operation": "avg_over_time",
+                       "show_overall": False,
+                       "show_per_gpu": True,
+                       "write_to_db": True,
+                       "long_name": "Temperature"}
+GPU_METRICS["PCIe Recv"] = {"metric": "pcie_rx_per_sec",
+                            "operation": "avg_over_time",
+                            "show_overall": False,
+                            "show_per_gpu": True,
+                            "write_to_db": True,
+                            "long_name": "Data Received by GPU over PCIe"}
+GPU_METRICS["PCIe Sent"] = {"metric": "pcie_tx_per_sec",
+                            "operation": "avg_over_time",
+                            "show_overall": False,
+                            "show_per_gpu": True,
+                            "write_to_db": True,
+                            "long_name": "Data Transmitted from GPU over PCIe"}
+GPU_METRICS["NVLink Recv"] = {"metric": "nvlink_total_rx_per_sec",
+                              "operation": "avg_over_time",
+                              "show_overall": False,
+                              "show_per_gpu": True,
+                              "write_to_db": True,
+                              "long_name": "Data Received by GPU over NVLink"}
+GPU_METRICS["NVLink Sent"] = {"metric": "nvlink_total_tx_per_sec",
+                              "operation": "avg_over_time",
+                              "show_overall": False,
+                              "show_per_gpu": True,
+                              "write_to_db": True,
+                              "long_name": "Data Transmitted from GPU over NVLink"}
+
 
 # translate cluster names in Slurm DB to informal names
 CLUSTER_TRANS = {}  # if no translations then use an empty dictionary

@@ -94,6 +94,15 @@ $ jobstats 39798795
   CPU memory usage [|||                                             6%]
   GPU utilization  [||||||||||||||||||||||||||||||||||             68%]
   GPU memory usage [|||||||||||||||||||||||||||||||||              66%]
+  ────────────────────────────────────────────────────────────────────────────
+          SM util. [|||||||||||||||||||||||                        48%]
+         OCC util. [||||||||||                                     20%]
+          TC util. [|||||||||||||||                                30%]
+         INT util. [|||                                             6%]
+    FP16 Max util. [                                                0%]
+    FP32 Avg util. [||                                              4%]
+    FP64 Max util. [                                                0%]
+     DRAM BW util. [||||||||||||||||||||                           40%]
 
                               Detailed Utilization
 ================================================================================
@@ -119,6 +128,26 @@ $ jobstats 39798795
       della-i14g3 (GPU 0): 26.5GB/40.0GB (66.2%)
       della-i14g3 (GPU 1): 26.5GB/40.0GB (66.2%)
 
+  Detailed GPU Metrics
+                         ------------------------------------------------------
+                          SM | OCC |  TC |  INT | FP32 | DRAM BW | Power | Temp
+                         ----+-----+-----+------+------+---------+-------+-----
+    della-i14g2 (GPU 0)  48% | 20% | 30% | 6.3% | 4.1% |     40% |  680W | 66°C
+    della-i14g2 (GPU 1)  48% | 20% | 30% | 6.2% | 4.1% |     40% |  673W | 54°C
+    della-i14g3 (GPU 0)  48% | 20% | 30% | 6.2% | 4.1% |     40% |  671W | 59°C
+    della-i14g3 (GPU 1)  48% | 20% | 30% | 6.3% | 4.1% |     40% |  678W | 65°C
+                         ------------------------------------------------------
+
+                         -------------------------------------------------
+                         PCIe Recv | PCIe Sent | NVLink Recv | NVLink Sent
+                         ----------+-----------+-------------+------------
+    della-i14g2 (GPU 0)    80 MB/s |   13 MB/s |    285 MB/s |    347 MB/s
+    della-i14g2 (GPU 1)    80 MB/s |   13 MB/s |    287 MB/s |    346 MB/s
+    della-i14g3 (GPU 0)    81 MB/s |   13 MB/s |    287 MB/s |    346 MB/s
+    della-i14g3 (GPU 1)    81 MB/s |   13 MB/s |    287 MB/s |    346 MB/s
+                         -------------------------------------------------
+                         https://princetonuniversity.github.io/jobstats/setup/detailed_gpu_metrics/
+
                                      Notes
 ================================================================================
   * This job only used 6% of the 256GB of total allocated CPU memory. For
@@ -137,10 +166,16 @@ $ jobstats 39798795
       https://mydella.princeton.edu/pun/sys/jobstats/39798795
 ```
 
+### Join the Mailing List
+
+Subscribe to the [Jobstats mailing list](https://lists.princeton.edu/cgi-bin/wa?SUBED1=JOBSTATS&A=1) to receive updates and other news.
+
 ### News and Updates
 
-- 2X Jul 2026: Jobstats presentation at PEARC 2026: "Getting the Most Out of Your GPUs: Automatic Cancellation of Low Efficiency
-Jobs, GPU Fractionalization, Detailed Metrics, and GPU Sharing"
+- 15 Nov 2026: The Jobstats team will be available at Supercomputing 2026 for any discussions (see contact below)
+- 5 Oct 2026: Jobstats version 1.1.0 was released (see [CHANGELOG](CHANGELOG.md))
+- 2 Sep 2026: [Detailed GPU metrics](https://princetonuniversity.github.io/jobstats/setup/detailed_gpu_metrics/) added to main branch
+- 29 Jul 2026: PEARC 2026: "Getting the Most Out of Your GPUs" ([Slides](https://researchcomputing.princeton.edu/document/6891), [Paper](https://dl.acm.org/doi/10.1145/3785462.3815871))
 - 23 Apr 2026: Presentation on Jobstats at NCAR ([see slides](https://researchcomputing.princeton.edu/document/6811))
 - 16 Nov 2025: The Jobstats team will be available at Supercomputing 2025 for any discussions (see contact below)
 - 28 Sep 2025: Subscribe to the [Jobstats mailing list](https://lists.princeton.edu/cgi-bin/wa?SUBED1=JOBSTATS&A=1)
@@ -176,10 +211,6 @@ Begin with [What is Jobstats?](https://princetonuniversity.github.io/jobstats/) 
 - Yale University - Center for Research Computing
 - and many more
 
-### Join the Mailing List
-
-Subscribe to the [Jobstats mailing list](https://lists.princeton.edu/cgi-bin/wa?SUBED1=JOBSTATS&A=1) to receive updates and other news.
-
 ### Contact
 
-One can create a GitHub issue or write direcly to the developers: Josko Plazonic (plazonic@princeton.edu) and Jonathan Halverson (halverson@princeton.edu)
+One can create a GitHub issue or write to the developers: Josko Plazonic (plazonic@princeton.edu) and Jonathan Halverson (halverson@princeton.edu)
