@@ -49,7 +49,9 @@ KAFKA_CONFIG = {
 # on where the pipeline runs and Druid is reachable, off everywhere else. Hopper
 # in particular is airgapped and has no Druid, so it must never default on.
 # $DRUID_ENABLED overrides in either direction (e.g. to test before rollout).
-DRUID_CLUSTERS = ("bouchet",)
+# Grace and McCleary producers started 2026-11-17; jobs that ended before that
+# have no row and fall back to Prometheus. Milgram cannot reach Druid.
+DRUID_CLUSTERS = ("bouchet", "grace", "mccleary")
 DRUID_CONFIG = {
     "enabled": os.environ.get(
         "DRUID_ENABLED",
